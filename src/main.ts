@@ -340,7 +340,7 @@ function compareTypeBucket(aType: string, bType: string): number {
 }
 
 function itemTypeBucket(itemType: string): number {
-  if (/non[- ]fiction/i.test(itemType)) {
+  if (/^\s*(adult|junior)\s+non[- ]fiction\b/i.test(itemType)) {
     return 0;
   }
 
