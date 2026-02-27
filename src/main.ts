@@ -97,6 +97,8 @@ pdfTextSize.addEventListener("change", () => {
   if (!downloadActions.classList.contains("hidden")) {
     resetDownloads();
     latestResult = null;
+    lastSortedSource = null;
+    hideStatus();
   }
 });
 
@@ -104,6 +106,8 @@ pdfColumns.addEventListener("change", () => {
   if (!downloadActions.classList.contains("hidden")) {
     resetDownloads();
     latestResult = null;
+    lastSortedSource = null;
+    hideStatus();
   }
 });
 
