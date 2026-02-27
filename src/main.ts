@@ -867,8 +867,11 @@ function mapSortErrorToUserMessage(error: unknown): string {
     return "Could not read this reservation list. Please check the pasted text and click Sort again.";
   }
 
-  if (message.includes("Parsing integrity check failed")) {
-    return "The list could not be safely processed. Please check the source text and sort again.";
+  const integrityMatch = message.match(/Parsing integrity check failed:\s*(\d+)\s+entries detected in source but only\s+(\d+)/i);
+  if (integrityMatch) {
+    const sourceCount = integrityMatch[1];
+    const processedCount = integrityMatch[2];
+    return `Processing failed: the source list has ${sourceCount} entries, but only ${processedCount} made it into the new list. Please check the pasted text and try again.`;
   }
 
   return "There was an error while sorting. Please reload the page and try again.";
