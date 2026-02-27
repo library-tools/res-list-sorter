@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Reservation List Sorter</title>
+    <link rel="stylesheet" href="/src/style.css" />
+  </head>
+  <body>
+    <main class="page">
+      <h1>Reservation List Sorter</h1>
+      <p class="subtitle">Paste the reservation list, then click Sort.</p>
+
+      <textarea id="sourceText" rows="12" spellcheck="false"></textarea>
+
+      <div class="controlRow">
+        <label for="pdfTextSize" class="label inline">PDF text size</label>
+        <select id="pdfTextSize" aria-label="PDF text size">
+          <option value="8">8 pt</option>
+          <option value="9">9 pt</option>
+          <option value="10">10 pt</option>
+          <option value="11">11 pt</option>
+          <option value="12" selected>12 pt</option>
+          <option value="13">13 pt</option>
+          <option value="14">14 pt</option>
+        </select>
+
+        <label for="pdfColumns" class="label inline">Columns</label>
+        <select id="pdfColumns" aria-label="PDF columns">
+          <option value="1" selected>1 column</option>
+          <option value="2">2 columns</option>
+        </select>
+      </div>
+
+      <div class="actions">
+        <button id="sortButton" type="button">Sort</button>
+        <button id="downloadAdultButton" type="button" class="hidden">Download Adult List</button>
+        <button id="downloadJuniorButton" type="button" class="hidden">Download Junior List</button>
+      </div>
+
+      <section id="statusPanel" class="status hidden" aria-live="polite"></section>
+    </main>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
