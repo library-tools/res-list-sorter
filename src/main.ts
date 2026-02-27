@@ -340,15 +340,24 @@ function compareTypeBucket(aType: string, bType: string): number {
 }
 
 function itemTypeBucket(itemType: string): number {
+  // Explicit rule: any DVD item type is treated as media/other.
+  if (/\bdvd\b/i.test(itemType)) {
+    return 3;
+  }
+
   if (/^\s*(adult|junior)\s+non[- ]fiction\b/i.test(itemType)) {
     return 0;
   }
 
-  if (/fiction/i.test(itemType)) {
+  if (/^\s*(adult|junior)\s+fiction\b/i.test(itemType)) {
     return 1;
   }
 
-  return 2;
+  if (/graphic\s+fiction/i.test(itemType)) {
+    return 2;
+  }
+
+  return 3;
 }
 
 function compareSequence(a: string, b: string): number {
