@@ -61,7 +61,8 @@ const downloadAdultButton = mustGet<HTMLButtonElement>("downloadAdultButton");
 const downloadJuniorButton = mustGet<HTMLButtonElement>("downloadJuniorButton");
 const statusPanel = mustGet<HTMLElement>("statusPanel");
 
-const entryStartRegex = /^\s*(.*?)\s+(30120\d+)\s*$/;
+const BARCODE_PATTERN = "30120\\d+";
+const entryStartRegex = new RegExp(`^\\s*(.*?)\\s+(${BARCODE_PATTERN})\\s*$`);
 const reportLineColumns = 64;
 
 let latestResult: SortResult | null = null;
@@ -113,7 +114,8 @@ sortButton.addEventListener("click", () => {
     downloadAdultButton.classList.remove("hidden");
     downloadJuniorButton.classList.remove("hidden");
   } catch (error) {
-    showError("There was an error. Please reload the page and try again.");
+    console.error(error);
+    showError(mapSortErrorToUserMessage(error));
   }
 });
 
@@ -173,6 +175,13 @@ function parseList(input: string): ParseResult {
 
   finalizeCurrent();
 
+  const rawEntryCount = lines.filter((line) => entryStartRegex.test(line)).length;
+  if (entries.length !== rawEntryCount) {
+    throw new Error(
+      `Parsing integrity check failed: ${rawEntryCount} entries detected in source but only ${entries.length} were successfully parsed. Do not use the output.`,
+    );
+  }
+
   if (entries.length === 0) {
     throw new Error("Entries could not be parsed.");
   }
@@ -229,13 +238,13 @@ function parseEntry(rawLines: string[], originalIndex: number): Entry {
 
 function findField(lines: string[], fieldName: string): string {
   const regex = new RegExp(`^\\s*${escapeRegex(fieldName)}\\s*:\\s*(.*)$`, "i");
-  const line = lines.find((candidate) => regex.test(candidate));
-  if (!line) {
-    return "";
+  for (const line of lines) {
+    const match = line.match(regex);
+    if (match) {
+      return (match[1] ?? "").trim();
+    }
   }
-
-  const match = line.match(regex);
-  return (match?.[1] ?? "").trim();
+  return "";
 }
 
 function classifyAudience(itemType: string, sequence: string): Audience {
@@ -253,6 +262,7 @@ function classifyAudience(itemType: string, sequence: string): Audience {
     return "junior";
   }
 
+  // Fallback: treat as adult unless junior markers are present.
   return "adult";
 }
 
@@ -264,7 +274,12 @@ function buildSortedLists(parsed: ParseResult): SortResult {
   const originalCount = allEntries.length;
   const adultCount = adultEntries.length;
   const juniorCount = juniorEntries.length;
-  const isValid = originalCount === adultCount + juniorCount;
+
+  const allIndices = new Set(allEntries.map((e) => e.originalIndex));
+  const splitIndices = new Set([...adultEntries, ...juniorEntries].map((e) => e.originalIndex));
+  const isValid =
+    splitIndices.size === allIndices.size &&
+    [...allIndices].every((i) => splitIndices.has(i));
 
   const adultDoc = buildDocument("Adult", parsed.libraryName, parsed.reportDate, adultEntries);
   const juniorDoc = buildDocument("Junior", parsed.libraryName, parsed.reportDate, juniorEntries);
@@ -362,10 +377,12 @@ function normalizeSequenceForSorting(itemType: string, sequence: string): string
 
   const normalized = sequence.trim().toLowerCase();
 
+  // Local shelf policy: Thriller is filed with Crime.
   if (normalized === "thriller") {
     return "Crime";
   }
 
+  // Local shelf policy: these are filed with general fiction.
   if (
     normalized === "historical" ||
     normalized === "romance" ||
@@ -451,7 +468,7 @@ function buildEntryRenderLines(rawLines: string[]): RenderLine[] {
   }
 
   const first = nonBlank[0].replace(/^\s+/, "");
-  const firstMatch = first.match(/^(.*?)\s+(30120\d+)\s*$/);
+  const firstMatch = first.match(new RegExp(`^(.*?)\\s+(${BARCODE_PATTERN})\\s*$`));
   const lines: RenderLine[] = [];
 
   if (firstMatch) {
@@ -562,32 +579,30 @@ function downloadPdf(fileName: string, docModel: RenderDocument, textSizePt: num
     const blockHeight = block.lines.length * lineHeight;
     const remaining = usableHeight - y;
 
-    if (blockHeight <= usableHeight && blockHeight > remaining) {
-      const movedToNewPage = advanceColumnOrPage();
-      if (movedToNewPage && !block.hasHeading) {
-        drawContinuedSectionHeading(block.sectionHeading);
-      }
-    }
-
     if (blockHeight > usableHeight) {
       for (const line of block.lines) {
         if (y + lineHeight > usableHeight) {
           const movedToNewPage = advanceColumnOrPage();
-          if (movedToNewPage) {
+          if (movedToNewPage && !block.hasHeading) {
             drawContinuedSectionHeading(block.sectionHeading);
           }
         }
 
         drawOneLine(line);
       }
+    } else {
+      if (blockHeight > remaining) {
+        const movedToNewPage = advanceColumnOrPage();
+        if (movedToNewPage && !block.hasHeading) {
+          drawContinuedSectionHeading(block.sectionHeading);
+        }
+      }
 
-      continue;
+      const leftX = columnStartXs[columnIndex];
+      const barcodeRightX = leftX + rightAlignedWidth;
+      drawWrappedLines(doc, block.lines, leftX, lineHeight, y, barcodeRightX, continuationIndent);
+      y += blockHeight;
     }
-
-    const leftX = columnStartXs[columnIndex];
-    const barcodeRightX = leftX + rightAlignedWidth;
-    drawWrappedLines(doc, block.lines, leftX, lineHeight, y, barcodeRightX, continuationIndent);
-    y += blockHeight;
   }
 
   const pageCount = doc.getNumberOfPages();
@@ -612,12 +627,12 @@ function drawPageTitle(doc: jsPDF, wrappedTitle: RenderLine[], pageCenterX: numb
 }
 
 function getPdfTextSize(): number {
-  const raw = Number.parseInt(pdfTextSize.value, 10);
-  if (!Number.isFinite(raw)) {
+  const parsed = Number.parseInt(pdfTextSize.value, 10);
+  if (!Number.isFinite(parsed)) {
     return 12;
   }
 
-  return Math.min(14, Math.max(8, raw));
+  return Math.min(14, Math.max(8, parsed));
 }
 
 function getPdfColumns(): 1 | 2 {
@@ -741,6 +756,24 @@ function isBlankLine(line: RenderLine): boolean {
 
 function setFontStyle(doc: jsPDF, style: FontStyle): void {
   doc.setFont("courier", style === "italic" ? "italic" : style === "bold" ? "bold" : "normal");
+}
+
+function mapSortErrorToUserMessage(error: unknown): string {
+  const message = error instanceof Error ? error.message : "";
+
+  if (
+    message.includes("No item entries found") ||
+    message.includes("Invalid entry start") ||
+    message.includes("Entries could not be parsed")
+  ) {
+    return "Could not read this reservation list. Please check the pasted text and click Sort again.";
+  }
+
+  if (message.includes("Parsing integrity check failed")) {
+    return "The list could not be safely processed. Please check the source text and sort again.";
+  }
+
+  return "There was an error while sorting. Please reload the page and try again.";
 }
 
 function showOk(message: string): void {

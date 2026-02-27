@@ -115,7 +115,6 @@ button:hover {
   background: #f8fff8;
   margin-bottom: 14px;
   white-space: pre-line;
-  font-family: "Source Sans 3", "Segoe UI", Tahoma, sans-serif;
 }
 
 .status.error {
