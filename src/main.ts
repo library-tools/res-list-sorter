@@ -56,7 +56,9 @@ type RenderDocument = {
 const sourceText = mustGet<HTMLTextAreaElement>("sourceText");
 const pdfTextSize = mustGet<HTMLSelectElement>("pdfTextSize");
 const pdfColumns = mustGet<HTMLSelectElement>("pdfColumns");
+const saveSettingsButton = mustGet<HTMLButtonElement>("saveSettingsButton");
 const sortButton = mustGet<HTMLButtonElement>("sortButton");
+const downloadActions = mustGet<HTMLElement>("downloadActions");
 const downloadAdultButton = mustGet<HTMLButtonElement>("downloadAdultButton");
 const downloadJuniorButton = mustGet<HTMLButtonElement>("downloadJuniorButton");
 const statusPanel = mustGet<HTMLElement>("statusPanel");
@@ -64,9 +66,19 @@ const statusPanel = mustGet<HTMLElement>("statusPanel");
 const BARCODE_PATTERN = "30120\\d+";
 const entryStartRegex = new RegExp(`^\\s*(.*?)\\s+(${BARCODE_PATTERN})\\s*$`);
 const reportLineColumns = 64;
+const SETTINGS_COOKIE = "resListSettings";
+const SETTINGS_COOKIE_MAX_AGE = 60 * 60 * 24 * 365;
 
 let latestResult: SortResult | null = null;
 let lastSortedSource: string | null = null;
+let saveSettingsResetTimer: number | null = null;
+
+loadSavedSettings();
+
+saveSettingsButton.addEventListener("click", () => {
+  saveCurrentSettings();
+  showSavedSettingsFeedback();
+});
 
 sourceText.addEventListener("input", () => {
   if (lastSortedSource === null) {
@@ -78,6 +90,20 @@ sourceText.addEventListener("input", () => {
     latestResult = null;
     lastSortedSource = null;
     hideStatus();
+  }
+});
+
+pdfTextSize.addEventListener("change", () => {
+  if (!downloadActions.classList.contains("hidden")) {
+    resetDownloads();
+    latestResult = null;
+  }
+});
+
+pdfColumns.addEventListener("change", () => {
+  if (!downloadActions.classList.contains("hidden")) {
+    resetDownloads();
+    latestResult = null;
   }
 });
 
@@ -97,22 +123,20 @@ sortButton.addEventListener("click", () => {
     const sorted = buildSortedLists(parsed);
     latestResult = sorted;
 
-    const statusLines = [
-      `Original items: ${sorted.originalCount}`,
-      `Adult items: ${sorted.adultCount}`,
-      `Junior items: ${sorted.juniorCount}`,
-    ];
+    const statusLine =
+      `Original items: ${sorted.originalCount} | ` +
+      `Adult items: ${sorted.adultCount} | ` +
+      `Junior items: ${sorted.juniorCount}`;
 
     if (!sorted.isValid) {
-      showError(statusLines.join("\n") + "\nIntegrity check: FAIL\n\nDo not use output until this is resolved.");
+      showError(statusLine + "\nIntegrity check: FAIL\n\nDo not use output until this is resolved.");
       return;
     }
 
-    showOk(statusLines.join("\n"));
+    showOk(statusLine);
     lastSortedSource = sourceText.value;
 
-    downloadAdultButton.classList.remove("hidden");
-    downloadJuniorButton.classList.remove("hidden");
+    downloadActions.classList.remove("hidden");
   } catch (error) {
     console.error(error);
     showError(mapSortErrorToUserMessage(error));
@@ -767,6 +791,67 @@ function setFontStyle(doc: jsPDF, style: FontStyle): void {
   doc.setFont("courier", style === "italic" ? "italic" : style === "bold" ? "bold" : "normal");
 }
 
+function loadSavedSettings(): void {
+  const raw = getCookieValue(SETTINGS_COOKIE);
+  if (!raw) {
+    return;
+  }
+
+  try {
+    const parsed = JSON.parse(decodeURIComponent(raw)) as { textSize?: string; columns?: string };
+
+    if (parsed.textSize && hasOption(pdfTextSize, parsed.textSize)) {
+      pdfTextSize.value = parsed.textSize;
+    }
+
+    if (parsed.columns && hasOption(pdfColumns, parsed.columns)) {
+      pdfColumns.value = parsed.columns;
+    }
+  } catch {
+    return;
+  }
+}
+
+function saveCurrentSettings(): void {
+  const settings = {
+    textSize: String(getPdfTextSize()),
+    columns: String(getPdfColumns()),
+  };
+
+  const encoded = encodeURIComponent(JSON.stringify(settings));
+  document.cookie = `${SETTINGS_COOKIE}=${encoded}; Max-Age=${SETTINGS_COOKIE_MAX_AGE}; Path=/; SameSite=Lax`;
+}
+
+function showSavedSettingsFeedback(): void {
+  if (saveSettingsResetTimer !== null) {
+    window.clearTimeout(saveSettingsResetTimer);
+    saveSettingsResetTimer = null;
+  }
+
+  saveSettingsButton.textContent = "Saved";
+  saveSettingsButton.disabled = true;
+
+  saveSettingsResetTimer = window.setTimeout(() => {
+    saveSettingsButton.textContent = "Save settings";
+    saveSettingsButton.disabled = false;
+    saveSettingsResetTimer = null;
+  }, 1000);
+}
+
+function hasOption(select: HTMLSelectElement, value: string): boolean {
+  return Array.from(select.options).some((option) => option.value === value);
+}
+
+function getCookieValue(name: string): string | null {
+  const prefix = `${name}=`;
+  const part = document.cookie
+    .split(";")
+    .map((segment) => segment.trim())
+    .find((segment) => segment.startsWith(prefix));
+
+  return part ? part.slice(prefix.length) : null;
+}
+
 function mapSortErrorToUserMessage(error: unknown): string {
   const message = error instanceof Error ? error.message : "";
 
@@ -797,8 +882,7 @@ function showError(message: string): void {
 }
 
 function resetDownloads(): void {
-  downloadAdultButton.classList.add("hidden");
-  downloadJuniorButton.classList.add("hidden");
+  downloadActions.classList.add("hidden");
 }
 
 function hideStatus(): void {
