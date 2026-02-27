@@ -823,7 +823,7 @@ function saveCurrentSettings(): void {
   };
 
   const encoded = encodeURIComponent(JSON.stringify(settings));
-  document.cookie = `${SETTINGS_COOKIE}=${encoded}; Max-Age=${SETTINGS_COOKIE_MAX_AGE}; Path=/; SameSite=Lax`;
+  document.cookie = `${SETTINGS_COOKIE}=${encoded}; Max-Age=${SETTINGS_COOKIE_MAX_AGE}; Path=/; SameSite=Lax; Secure`;
 }
 
 function showSavedSettingsFeedback(): void {
