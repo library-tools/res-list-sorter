@@ -18,13 +18,20 @@
       <textarea id="sourceText" rows="12" spellcheck="false"></textarea>
 
       <div class="controlRow">
-        <label for="pdfTextSize" class="label inline">PDF text size</label>
+        <label for="pdfFont" class="label inline">Font</label>
+        <select id="pdfFont">
+          <option value="helvetica" selected>Helvetica</option>
+          <option value="times">Times</option>
+          <option value="courier">Courier</option>
+        </select>
+
+        <label for="pdfTextSize" class="label inline">Size</label>
         <select id="pdfTextSize">
           <option value="8">8 pt</option>
           <option value="9">9 pt</option>
           <option value="10">10 pt</option>
-          <option value="11">11 pt</option>
-          <option value="12" selected>12 pt</option>
+          <option value="11" selected>11 pt</option>
+          <option value="12">12 pt</option>
           <option value="13">13 pt</option>
           <option value="14">14 pt</option>
         </select>

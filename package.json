@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dc": "sh -c 'lsof -nP -tiTCP:5173 -sTCP:LISTEN -c node 2>/dev/null | xargs -r kill; vite --port 5173 --strictPort'",
     "build": "vite build",
     "preview": "vite preview"
   },

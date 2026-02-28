@@ -29,6 +29,7 @@ type SortResult = {
 };
 
 type FontStyle = "normal" | "bold" | "italic";
+type PdfFontFamily = "helvetica" | "times" | "courier";
 
 type RenderSegment = {
   text: string;
@@ -54,6 +55,7 @@ type RenderDocument = {
 };
 
 const sourceText = mustGet<HTMLTextAreaElement>("sourceText");
+const pdfFont = mustGet<HTMLSelectElement>("pdfFont");
 const pdfTextSize = mustGet<HTMLSelectElement>("pdfTextSize");
 const pdfColumns = mustGet<HTMLSelectElement>("pdfColumns");
 const saveSettingsButton = mustGet<HTMLButtonElement>("saveSettingsButton");
@@ -65,7 +67,7 @@ const statusPanel = mustGet<HTMLElement>("statusPanel");
 
 const BARCODE_PATTERN = "30120\\d+";
 const entryStartRegex = new RegExp(`^\\s*(.*?)\\s+(${BARCODE_PATTERN})\\s*$`);
-const reportLineColumns = 64;
+const reportLineColumns = 45;
 const SETTINGS_COOKIE = "resListSettings";
 const SETTINGS_COOKIE_MAX_AGE = 60 * 60 * 24 * 365;
 
@@ -94,6 +96,15 @@ sourceText.addEventListener("input", () => {
 });
 
 pdfTextSize.addEventListener("change", () => {
+  if (!downloadActions.classList.contains("hidden")) {
+    resetDownloads();
+    latestResult = null;
+    lastSortedSource = null;
+    hideStatus();
+  }
+});
+
+pdfFont.addEventListener("change", () => {
   if (!downloadActions.classList.contains("hidden")) {
     resetDownloads();
     latestResult = null;
@@ -153,7 +164,7 @@ downloadAdultButton.addEventListener("click", () => {
     return;
   }
 
-  downloadPdf("adult-list.pdf", latestResult.adultDoc, getPdfTextSize(), getPdfColumns());
+  downloadPdf("adult-list.pdf", latestResult.adultDoc, getPdfTextSize(), getPdfColumns(), getPdfFontFamily());
 });
 
 downloadJuniorButton.addEventListener("click", () => {
@@ -162,7 +173,7 @@ downloadJuniorButton.addEventListener("click", () => {
     return;
   }
 
-  downloadPdf("junior-list.pdf", latestResult.juniorDoc, getPdfTextSize(), getPdfColumns());
+  downloadPdf("junior-list.pdf", latestResult.juniorDoc, getPdfTextSize(), getPdfColumns(), getPdfFontFamily());
 });
 
 function parseList(input: string): ParseResult {
@@ -424,7 +435,8 @@ function normalizeSequenceForSorting(itemType: string, sequence: string): string
     normalized === "historical" ||
     normalized === "romance" ||
     normalized === "saga" ||
-    normalized === "horror"
+    normalized === "horror" ||
+    normalized === "western"
   ) {
     return "";
   }
@@ -540,14 +552,21 @@ function buildEntryRenderLines(rawLines: string[]): RenderLine[] {
   return lines;
 }
 
-function downloadPdf(fileName: string, docModel: RenderDocument, textSizePt: number, columnCount: 1 | 2): void {
+function downloadPdf(
+  fileName: string,
+  docModel: RenderDocument,
+  textSizePt: number,
+  columnCount: 1 | 2,
+  fontFamily: PdfFontFamily,
+): void {
   const doc = new jsPDF({ unit: "pt", format: "a4" });
-  doc.setFont("courier", "normal");
+  doc.setFont(fontFamily, "normal");
   doc.setFontSize(textSizePt);
 
   const margin = 36;
   const textHeight = doc.getTextDimensions("Mg").h;
   const lineHeight = Math.ceil(textHeight * 1.25);
+  const fitSlack = Math.floor(lineHeight * 0.6);
   const pageWidth = doc.internal.pageSize.getWidth();
   const pageHeight = doc.internal.pageSize.getHeight();
   const maxTextWidth = pageWidth - margin * 2;
@@ -558,12 +577,12 @@ function downloadPdf(fileName: string, docModel: RenderDocument, textSizePt: num
   const columnWidth = columnCount === 2 ? (maxTextWidth - columnGap) / 2 : maxTextWidth;
   const rightAlignedWidth = Math.min(columnWidth, reportLineWidth);
 
-  const footerY = pageHeight - 24;
+  const footerY = pageHeight - 16;
   const usableHeight = footerY - margin;
 
-  const wrappedTitle = wrapRenderLine(doc, makeStyledLine(docModel.title, "bold"), maxTextWidth, maxTextWidth);
+  const wrappedTitle = wrapRenderLine(doc, makeStyledLine(docModel.title, "bold"), maxTextWidth, maxTextWidth, fontFamily);
   const wrappedBlocks = docModel.blocks.map((block) => ({
-    lines: block.lines.flatMap((line) => wrapRenderLine(doc, line, columnWidth, rightAlignedWidth)),
+    lines: block.lines.flatMap((line) => wrapRenderLine(doc, line, columnWidth, rightAlignedWidth, fontFamily)),
     sectionHeading: block.sectionHeading,
     hasHeading: block.hasHeading,
   }));
@@ -572,7 +591,7 @@ function downloadPdf(fileName: string, docModel: RenderDocument, textSizePt: num
     columnCount === 2 ? [margin, margin + columnWidth + columnGap] : [margin];
 
   const startNewPage = (): { y: number; columnIndex: number; contentStartY: number } => {
-    const contentStartY = drawPageTitle(doc, wrappedTitle, pageWidth / 2, margin, lineHeight) + lineHeight;
+    const contentStartY = drawPageTitle(doc, wrappedTitle, pageWidth / 2, margin, lineHeight, fontFamily) + lineHeight;
     return { y: contentStartY, columnIndex: 0, contentStartY };
   };
 
@@ -583,10 +602,10 @@ function downloadPdf(fileName: string, docModel: RenderDocument, textSizePt: num
     const barcodeRightX = leftX + rightAlignedWidth;
     const continuedHeading = makeStyledLine(`${lineText(sectionHeading)} (cont.)`, "bold");
     const headingLines = [
-      ...wrapRenderLine(doc, continuedHeading, columnWidth, rightAlignedWidth),
+      ...wrapRenderLine(doc, continuedHeading, columnWidth, rightAlignedWidth, fontFamily),
       makePlainLine(""),
     ];
-    drawWrappedLines(doc, headingLines, leftX, lineHeight, y, barcodeRightX, continuationIndent);
+    drawWrappedLines(doc, headingLines, leftX, lineHeight, y, barcodeRightX, continuationIndent, fontFamily);
     y += headingLines.length * lineHeight;
   };
 
@@ -608,16 +627,29 @@ function downloadPdf(fileName: string, docModel: RenderDocument, textSizePt: num
   const drawOneLine = (line: RenderLine): void => {
     const leftX = columnStartXs[columnIndex];
     const barcodeRightX = leftX + rightAlignedWidth;
-    drawWrappedLines(doc, [line], leftX, lineHeight, y, barcodeRightX, continuationIndent);
+    drawWrappedLines(doc, [line], leftX, lineHeight, y, barcodeRightX, continuationIndent, fontFamily);
     y += lineHeight;
   };
 
   for (const block of wrappedBlocks) {
-    const blockHeight = block.lines.length * lineHeight;
+    let linesToDraw = block.lines;
+    const trailingBlankCount = countTrailingBlankLines(linesToDraw);
+    if (trailingBlankCount > 0) {
+      const trimmedLines = linesToDraw.slice(0, linesToDraw.length - trailingBlankCount);
+      const fullHeight = linesToDraw.length * lineHeight;
+      const trimmedHeight = trimmedLines.length * lineHeight;
+      const remaining = usableHeight - y;
+
+      if (fullHeight > remaining + fitSlack && trimmedHeight <= remaining + fitSlack) {
+        linesToDraw = trimmedLines;
+      }
+    }
+
+    const blockHeight = linesToDraw.length * lineHeight;
     const remaining = usableHeight - y;
 
     if (blockHeight > usableHeight) {
-      for (const line of block.lines) {
+      for (const line of linesToDraw) {
         if (y + lineHeight > usableHeight) {
           const movedToNewPage = advanceColumnOrPage();
           if (movedToNewPage && !block.hasHeading) {
@@ -628,7 +660,7 @@ function downloadPdf(fileName: string, docModel: RenderDocument, textSizePt: num
         drawOneLine(line);
       }
     } else {
-      if (blockHeight > remaining) {
+      if (blockHeight > remaining + fitSlack) {
         const movedToNewPage = advanceColumnOrPage();
         if (movedToNewPage && !block.hasHeading) {
           drawContinuedSectionHeading(block.sectionHeading);
@@ -637,7 +669,7 @@ function downloadPdf(fileName: string, docModel: RenderDocument, textSizePt: num
 
       const leftX = columnStartXs[columnIndex];
       const barcodeRightX = leftX + rightAlignedWidth;
-      drawWrappedLines(doc, block.lines, leftX, lineHeight, y, barcodeRightX, continuationIndent);
+      drawWrappedLines(doc, linesToDraw, leftX, lineHeight, y, barcodeRightX, continuationIndent, fontFamily);
       y += blockHeight;
     }
   }
@@ -645,7 +677,7 @@ function downloadPdf(fileName: string, docModel: RenderDocument, textSizePt: num
   const pageCount = doc.getNumberOfPages();
   for (let page = 1; page <= pageCount; page += 1) {
     doc.setPage(page);
-    doc.setFont("courier", "normal");
+    doc.setFont(fontFamily, "normal");
     doc.setFontSize(textSizePt);
     doc.text(`Page ${page} of ${pageCount}`, pageWidth / 2, footerY, { align: "center" });
   }
@@ -653,10 +685,17 @@ function downloadPdf(fileName: string, docModel: RenderDocument, textSizePt: num
   doc.save(fileName);
 }
 
-function drawPageTitle(doc: jsPDF, wrappedTitle: RenderLine[], pageCenterX: number, margin: number, lineHeight: number): number {
+function drawPageTitle(
+  doc: jsPDF,
+  wrappedTitle: RenderLine[],
+  pageCenterX: number,
+  margin: number,
+  lineHeight: number,
+  fontFamily: PdfFontFamily,
+): number {
   let y = margin;
   for (const line of wrappedTitle) {
-    drawCenteredLine(doc, line, pageCenterX, y);
+    drawCenteredLine(doc, line, pageCenterX, y, fontFamily);
     y += lineHeight;
   }
 
@@ -666,17 +705,32 @@ function drawPageTitle(doc: jsPDF, wrappedTitle: RenderLine[], pageCenterX: numb
 function getPdfTextSize(): number {
   const parsed = Number.parseInt(pdfTextSize.value, 10);
   if (!Number.isFinite(parsed)) {
-    return 12;
+    return 11;
   }
 
   return Math.min(14, Math.max(8, parsed));
+}
+
+function getPdfFontFamily(): PdfFontFamily {
+  const value = pdfFont.value;
+  if (value === "times" || value === "courier") {
+    return value;
+  }
+
+  return "helvetica";
 }
 
 function getPdfColumns(): 1 | 2 {
   return pdfColumns.value === "2" ? 2 : 1;
 }
 
-function wrapRenderLine(doc: jsPDF, line: RenderLine, maxTextWidth: number, rightAlignedWidth: number): RenderLine[] {
+function wrapRenderLine(
+  doc: jsPDF,
+  line: RenderLine,
+  maxTextWidth: number,
+  rightAlignedWidth: number,
+  fontFamily: PdfFontFamily,
+): RenderLine[] {
   const fullText = lineText(line);
   if (fullText === "") {
     return [line];
@@ -686,9 +740,9 @@ function wrapRenderLine(doc: jsPDF, line: RenderLine, maxTextWidth: number, righ
 
   if (line.rightText) {
     const rightStyle = line.rightStyle ?? "normal";
-    setFontStyle(doc, rightStyle);
+    setFontStyle(doc, rightStyle, fontFamily);
     const barcodeWidth = doc.getTextWidth(line.rightText);
-    setFontStyle(doc, "normal");
+    setFontStyle(doc, "normal", fontFamily);
     const gapWidth = doc.getTextWidth("  ");
     const leftMaxWidth = Math.max(20, rightAlignedWidth - barcodeWidth - gapWidth);
     const wrappedLeft = doc.splitTextToSize(fullText, leftMaxWidth) as string[];
@@ -732,6 +786,7 @@ function drawWrappedLines(
   startY: number,
   barcodeRightX: number,
   continuationIndent: number,
+  fontFamily: PdfFontFamily,
 ): void {
   let y = startY;
 
@@ -742,13 +797,13 @@ function drawWrappedLines(
         continue;
       }
 
-      setFontStyle(doc, segment.style);
+      setFontStyle(doc, segment.style, fontFamily);
       doc.text(segment.text, x, y);
       x += doc.getTextWidth(segment.text);
     }
 
     if (line.rightText) {
-      setFontStyle(doc, line.rightStyle ?? "normal");
+      setFontStyle(doc, line.rightStyle ?? "normal", fontFamily);
       doc.text(line.rightText, barcodeRightX, y, { align: "right" });
     }
 
@@ -756,14 +811,14 @@ function drawWrappedLines(
   }
 }
 
-function drawCenteredLine(doc: jsPDF, line: RenderLine, centerX: number, y: number): void {
+function drawCenteredLine(doc: jsPDF, line: RenderLine, centerX: number, y: number, fontFamily: PdfFontFamily): void {
   const text = lineText(line);
   if (text === "") {
     return;
   }
 
   const style = line.segments[0]?.style ?? "normal";
-  setFontStyle(doc, style);
+  setFontStyle(doc, style, fontFamily);
   doc.text(text, centerX, y, { align: "center" });
 }
 
@@ -791,8 +846,21 @@ function isBlankLine(line: RenderLine): boolean {
   return lineText(line) === "" && !line.rightText;
 }
 
-function setFontStyle(doc: jsPDF, style: FontStyle): void {
-  doc.setFont("courier", style === "italic" ? "italic" : style === "bold" ? "bold" : "normal");
+function countTrailingBlankLines(lines: RenderLine[]): number {
+  let count = 0;
+  for (let i = lines.length - 1; i >= 0; i -= 1) {
+    if (!isBlankLine(lines[i])) {
+      break;
+    }
+
+    count += 1;
+  }
+
+  return count;
+}
+
+function setFontStyle(doc: jsPDF, style: FontStyle, fontFamily: PdfFontFamily): void {
+  doc.setFont(fontFamily, style === "italic" ? "italic" : style === "bold" ? "bold" : "normal");
 }
 
 function loadSavedSettings(): void {
@@ -802,7 +870,11 @@ function loadSavedSettings(): void {
   }
 
   try {
-    const parsed = JSON.parse(decodeURIComponent(raw)) as { textSize?: string; columns?: string };
+    const parsed = JSON.parse(decodeURIComponent(raw)) as { font?: string; textSize?: string; columns?: string };
+
+    if (parsed.font && hasOption(pdfFont, parsed.font)) {
+      pdfFont.value = parsed.font;
+    }
 
     if (parsed.textSize && hasOption(pdfTextSize, parsed.textSize)) {
       pdfTextSize.value = parsed.textSize;
@@ -818,6 +890,7 @@ function loadSavedSettings(): void {
 
 function saveCurrentSettings(): void {
   const settings = {
+    font: getPdfFontFamily(),
     textSize: String(getPdfTextSize()),
     columns: String(getPdfColumns()),
   };
