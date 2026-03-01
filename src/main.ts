@@ -72,6 +72,7 @@ const SETTINGS_STORAGE_KEY = "resListSettings";
 const MAX_INPUT_BYTES = 1_048_576;
 const MAX_RENDER_LINES = 12_000;
 const MAX_PDF_PAGES = 500;
+const FAIRY_FOLK_MYT_SEQUENCE = "Children's Fairy /Folk/Myt";
 
 let latestResult: SortResult | null = null;
 let lastSortedSource: string | null = null;
@@ -344,6 +345,33 @@ function buildSortedLists(parsed: ParseResult): SortResult {
 }
 
 function compareEntries(a: Entry, b: Entry): number {
+  const aSequenceForSort = normalizeSequenceForSorting(a.itemType, a.sequence);
+  const bSequenceForSort = normalizeSequenceForSorting(b.itemType, b.sequence);
+
+  const specialSequenceCompare = compareSpecialSequenceBucket(aSequenceForSort, bSequenceForSort);
+  if (specialSequenceCompare !== 0) {
+    return specialSequenceCompare;
+  }
+
+  if (isFairyFolkMytSequence(aSequenceForSort) && isFairyFolkMytSequence(bSequenceForSort)) {
+    const shelfmarkCompare = compareText(a.shelfmark, b.shelfmark);
+    if (shelfmarkCompare !== 0) {
+      return shelfmarkCompare;
+    }
+
+    const authorCompare = compareText(a.author, b.author);
+    if (authorCompare !== 0) {
+      return authorCompare;
+    }
+
+    const barcodeCompare = compareText(a.barcode, b.barcode);
+    if (barcodeCompare !== 0) {
+      return barcodeCompare;
+    }
+
+    return a.originalIndex - b.originalIndex;
+  }
+
   const typeBucketCompare = compareTypeBucket(a.itemType, b.itemType);
   if (typeBucketCompare !== 0) {
     return typeBucketCompare;
@@ -355,8 +383,8 @@ function compareEntries(a: Entry, b: Entry): number {
   }
 
   const sequenceCompare = compareSequence(
-    normalizeSequenceForSorting(a.itemType, a.sequence),
-    normalizeSequenceForSorting(b.itemType, b.sequence),
+    aSequenceForSort,
+    bSequenceForSort,
   );
   if (sequenceCompare !== 0) {
     return sequenceCompare;
@@ -454,6 +482,18 @@ function normalizeSequenceForSorting(itemType: string, sequence: string): string
   return sequence;
 }
 
+function compareSpecialSequenceBucket(aSequence: string, bSequence: string): number {
+  return specialSequenceBucketRank(aSequence) - specialSequenceBucketRank(bSequence);
+}
+
+function specialSequenceBucketRank(sequence: string): number {
+  return isFairyFolkMytSequence(sequence) ? 0 : 1;
+}
+
+function isFairyFolkMytSequence(sequence: string): boolean {
+  return sequence.trim() === FAIRY_FOLK_MYT_SEQUENCE;
+}
+
 function buildDocument(
   audienceLabel: string,
   libraryName: string,
@@ -472,7 +512,7 @@ function buildRenderBlocks(entries: Entry[]): RenderBlock[] {
 
   for (const entry of entries) {
     const effectiveSequence = normalizeSequenceForSorting(entry.itemType, entry.sequence);
-    const groupKey = `${entry.itemType}\u0000${effectiveSequence}`;
+    const groupKey = renderGroupKey(entry.itemType, effectiveSequence);
 
     const cleanedEntryLines = buildEntryRenderLines(entry.rawLines);
 
@@ -513,11 +553,23 @@ function buildRenderBlocks(entries: Entry[]): RenderBlock[] {
 }
 
 function formatGroupHeading(itemType: string, effectiveSequence: string): string {
+  if (isFairyFolkMytSequence(effectiveSequence)) {
+    return `${FAIRY_FOLK_MYT_SEQUENCE} —`;
+  }
+
   if (effectiveSequence.trim() === "") {
     return `${itemType} —`;
   }
 
   return `${itemType} — ${effectiveSequence}`;
+}
+
+function renderGroupKey(itemType: string, effectiveSequence: string): string {
+  if (isFairyFolkMytSequence(effectiveSequence)) {
+    return `sequence\u0000${FAIRY_FOLK_MYT_SEQUENCE}`;
+  }
+
+  return `${itemType}\u0000${effectiveSequence}`;
 }
 
 function buildEntryRenderLines(rawLines: string[]): RenderLine[] {
