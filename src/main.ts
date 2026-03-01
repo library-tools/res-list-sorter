@@ -68,8 +68,10 @@ const statusPanel = mustGet<HTMLElement>("statusPanel");
 const BARCODE_PATTERN = "30120\\d+";
 const entryStartRegex = new RegExp(`^\\s*(.*?)\\s+(${BARCODE_PATTERN})\\s*$`);
 const reportLineColumns = 45;
-const SETTINGS_COOKIE = "resListSettings";
-const SETTINGS_COOKIE_MAX_AGE = 60 * 60 * 24 * 365;
+const SETTINGS_STORAGE_KEY = "resListSettings";
+const MAX_INPUT_BYTES = 1_048_576;
+const MAX_RENDER_LINES = 12_000;
+const MAX_PDF_PAGES = 500;
 
 let latestResult: SortResult | null = null;
 let lastSortedSource: string | null = null;
@@ -130,6 +132,14 @@ sortButton.addEventListener("click", () => {
   const source = sourceText.value;
   if (!source.trim()) {
     showError("Please paste a reservation list before sorting.");
+    return;
+  }
+
+  const inputBytes = new TextEncoder().encode(source).length;
+  if (inputBytes > MAX_INPUT_BYTES) {
+    showError(
+      `Input is too large (${formatBytes(inputBytes)}). Maximum allowed is ${formatBytes(MAX_INPUT_BYTES)}.`,
+    );
     return;
   }
 
@@ -587,8 +597,23 @@ function downloadPdf(
     hasHeading: block.hasHeading,
   }));
 
+  const totalWrappedLines = wrappedBlocks.reduce((sum, block) => sum + block.lines.length, wrappedTitle.length);
+  if (totalWrappedLines > MAX_RENDER_LINES) {
+    showError(
+      `Output is too large to render safely (${totalWrappedLines.toLocaleString()} lines). ` +
+        `Maximum allowed is ${MAX_RENDER_LINES.toLocaleString()} lines. Please split the list into smaller batches.`,
+    );
+    return;
+  }
+
   const columnStartXs =
     columnCount === 2 ? [margin, margin + columnWidth + columnGap] : [margin];
+  let renderAborted = false;
+
+  const abortRender = (message: string): void => {
+    showError(message);
+    renderAborted = true;
+  };
 
   const startNewPage = (): { y: number; columnIndex: number; contentStartY: number } => {
     const contentStartY = drawPageTitle(doc, wrappedTitle, pageWidth / 2, margin, lineHeight, fontFamily) + lineHeight;
@@ -614,6 +639,14 @@ function downloadPdf(
       columnIndex += 1;
       y = contentStartY;
       return false;
+    }
+
+    if (doc.getNumberOfPages() >= MAX_PDF_PAGES) {
+      abortRender(
+        `Output is too large to render safely (${MAX_PDF_PAGES.toLocaleString()} pages limit). ` +
+          "Please split the list into smaller batches.",
+      );
+      return true;
     }
 
     doc.addPage();
@@ -652,6 +685,10 @@ function downloadPdf(
       for (const line of linesToDraw) {
         if (y + lineHeight > usableHeight) {
           const movedToNewPage = advanceColumnOrPage();
+          if (renderAborted) {
+            return;
+          }
+
           if (movedToNewPage && !block.hasHeading) {
             drawContinuedSectionHeading(block.sectionHeading);
           }
@@ -662,6 +699,10 @@ function downloadPdf(
     } else {
       if (blockHeight > remaining + fitSlack) {
         const movedToNewPage = advanceColumnOrPage();
+        if (renderAborted) {
+          return;
+        }
+
         if (movedToNewPage && !block.hasHeading) {
           drawContinuedSectionHeading(block.sectionHeading);
         }
@@ -672,6 +713,10 @@ function downloadPdf(
       drawWrappedLines(doc, linesToDraw, leftX, lineHeight, y, barcodeRightX, continuationIndent, fontFamily);
       y += blockHeight;
     }
+  }
+
+  if (renderAborted) {
+    return;
   }
 
   const pageCount = doc.getNumberOfPages();
@@ -864,13 +909,13 @@ function setFontStyle(doc: jsPDF, style: FontStyle, fontFamily: PdfFontFamily): 
 }
 
 function loadSavedSettings(): void {
-  const raw = getCookieValue(SETTINGS_COOKIE);
-  if (!raw) {
-    return;
-  }
-
   try {
-    const parsed = JSON.parse(decodeURIComponent(raw)) as { font?: string; textSize?: string; columns?: string };
+    const raw = window.localStorage.getItem(SETTINGS_STORAGE_KEY);
+    if (!raw) {
+      return;
+    }
+
+    const parsed = JSON.parse(raw) as { font?: string; textSize?: string; columns?: string };
 
     if (parsed.font && hasOption(pdfFont, parsed.font)) {
       pdfFont.value = parsed.font;
@@ -895,8 +940,11 @@ function saveCurrentSettings(): void {
     columns: String(getPdfColumns()),
   };
 
-  const encoded = encodeURIComponent(JSON.stringify(settings));
-  document.cookie = `${SETTINGS_COOKIE}=${encoded}; Max-Age=${SETTINGS_COOKIE_MAX_AGE}; Path=/; SameSite=Lax; Secure`;
+  try {
+    window.localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(settings));
+  } catch {
+    return;
+  }
 }
 
 function showSavedSettingsFeedback(): void {
@@ -917,16 +965,6 @@ function showSavedSettingsFeedback(): void {
 
 function hasOption(select: HTMLSelectElement, value: string): boolean {
   return Array.from(select.options).some((option) => option.value === value);
-}
-
-function getCookieValue(name: string): string | null {
-  const prefix = `${name}=`;
-  const part = document.cookie
-    .split(";")
-    .map((segment) => segment.trim())
-    .find((segment) => segment.startsWith(prefix));
-
-  return part ? part.slice(prefix.length) : null;
 }
 
 function mapSortErrorToUserMessage(error: unknown): string {
@@ -982,4 +1020,16 @@ function mustGet<T extends HTMLElement>(id: string): T {
 
 function escapeRegex(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) {
+    return `${bytes} B`;
+  }
+
+  if (bytes < 1024 * 1024) {
+    return `${(bytes / 1024).toFixed(1)} KB`;
+  }
+
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }

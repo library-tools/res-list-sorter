@@ -1,0 +1,62 @@
+name: Weekly Security Audit
+
+on:
+  schedule:
+    - cron: "0 8 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Block on high+ prod vulnerabilities
+        run: npm audit --omit=dev --audit-level=high
+
+      - name: Full audit (informational)
+        id: full_audit
+        if: always()
+        continue-on-error: true
+        run: npm audit --json > audit-full.json
+
+      - name: Publish full-audit summary
+        if: always()
+        run: |
+          node <<'NODE'
+          const fs = require("fs");
+
+          let out = "## Full audit (informational)\n";
+
+          try {
+            const audit = JSON.parse(fs.readFileSync("audit-full.json", "utf8"));
+            const vulnerabilities = (audit.metadata && audit.metadata.vulnerabilities) || {};
+
+            out += `- info: ${vulnerabilities.info || 0}\n`;
+            out += `- low: ${vulnerabilities.low || 0}\n`;
+            out += `- moderate: ${vulnerabilities.moderate || 0}\n`;
+            out += `- high: ${vulnerabilities.high || 0}\n`;
+            out += `- critical: ${vulnerabilities.critical || 0}\n`;
+
+            if ((vulnerabilities.total || 0) > 0) {
+              out += "\nDetails are in the Full audit step logs.\n";
+            }
+          } catch {
+            out += "- Full audit output unavailable.\n";
+          }
+
+          fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, out);
+          NODE
