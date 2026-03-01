@@ -2,7 +2,7 @@
   --bg: #ffffff;
   --card: #ffffff;
   --ink: #000000;
-  --muted: #000000;
+  --muted: #444444;
   --border: #000000;
 }
 
@@ -131,8 +131,8 @@ button:hover {
 }
 
 .status.error {
-  border-left-color: var(--border);
-  background: #fff;
+  border-left-color: #8a1f1f;
+  background: #fff4f4;
 }
 
 .hidden {

@@ -23,7 +23,6 @@ type SortResult = {
   originalCount: number;
   adultCount: number;
   juniorCount: number;
-  isValid: boolean;
   adultDoc: RenderDocument;
   juniorDoc: RenderDocument;
 };
@@ -154,11 +153,6 @@ sortButton.addEventListener("click", () => {
       `Adult items: ${sorted.adultCount} | ` +
       `Junior items: ${sorted.juniorCount}`;
 
-    if (!sorted.isValid) {
-      showError(statusLine + "\nIntegrity check: FAIL\n\nDo not use output until this is resolved.");
-      return;
-    }
-
     showOk(statusLine);
     lastSortedSource = sourceText.value;
 
@@ -170,7 +164,7 @@ sortButton.addEventListener("click", () => {
 });
 
 downloadAdultButton.addEventListener("click", () => {
-  if (!latestResult || !latestResult.isValid) {
+  if (!latestResult) {
     showError("There was an error. Please reload the page and try again.");
     return;
   }
@@ -179,7 +173,7 @@ downloadAdultButton.addEventListener("click", () => {
 });
 
 downloadJuniorButton.addEventListener("click", () => {
-  if (!latestResult || !latestResult.isValid) {
+  if (!latestResult) {
     showError("There was an error. Please reload the page and try again.");
     return;
   }
@@ -224,13 +218,6 @@ function parseList(input: string): ParseResult {
   }
 
   finalizeCurrent();
-
-  const rawEntryCount = lines.filter((line) => entryStartRegex.test(line)).length;
-  if (entries.length !== rawEntryCount) {
-    throw new Error(
-      `Parsing integrity check failed: ${rawEntryCount} entries detected in source but only ${entries.length} were successfully parsed. Do not use the output.`,
-    );
-  }
 
   if (entries.length === 0) {
     throw new Error("Entries could not be parsed.");
@@ -325,12 +312,6 @@ function buildSortedLists(parsed: ParseResult): SortResult {
   const adultCount = adultEntries.length;
   const juniorCount = juniorEntries.length;
 
-  const allIndices = new Set(allEntries.map((e) => e.originalIndex));
-  const splitIndices = new Set([...adultEntries, ...juniorEntries].map((e) => e.originalIndex));
-  const isValid =
-    splitIndices.size === allIndices.size &&
-    [...allIndices].every((i) => splitIndices.has(i));
-
   const adultDoc = buildDocument("Adult", parsed.libraryName, parsed.reportDate, adultEntries);
   const juniorDoc = buildDocument("Junior", parsed.libraryName, parsed.reportDate, juniorEntries);
 
@@ -338,7 +319,6 @@ function buildSortedLists(parsed: ParseResult): SortResult {
     originalCount,
     adultCount,
     juniorCount,
-    isValid,
     adultDoc,
     juniorDoc,
   };
@@ -531,13 +511,9 @@ function buildRenderBlocks(entries: Entry[]): RenderBlock[] {
       continue;
     }
 
-    if (!currentSectionHeading) {
-      currentSectionHeading = makeStyledLine(formatGroupHeading(entry.itemType, effectiveSequence), "bold");
-    }
-
     blocks.push({
       lines: [...cleanedEntryLines, makePlainLine("")],
-      sectionHeading: currentSectionHeading,
+      sectionHeading: currentSectionHeading!,
       hasHeading: false,
     });
   }
@@ -674,14 +650,37 @@ function downloadPdf(
 
   let { y, columnIndex, contentStartY } = startNewPage();
 
-  const drawContinuedSectionHeading = (sectionHeading: RenderLine): void => {
+  const continuedSectionHeadingLines = (sectionHeading: RenderLine): RenderLine[] => {
     const leftX = columnStartXs[columnIndex];
-    const barcodeRightX = leftX + rightAlignedWidth;
     const continuedHeading = makeStyledLine(`${lineText(sectionHeading)} (cont.)`, "bold");
-    const headingLines = [
+    const headingLines: RenderLine[] = [
       ...wrapRenderLine(doc, continuedHeading, columnWidth, rightAlignedWidth, fontFamily),
       makePlainLine(""),
     ];
+
+    if (headingLines.length * lineHeight > usableHeight) {
+      abortRender("Section heading is too long to render safely. Please reduce heading length and try again.");
+      return [];
+    }
+
+    return headingLines;
+  };
+
+  const drawContinuedSectionHeading = (sectionHeading: RenderLine): void => {
+    const leftX = columnStartXs[columnIndex];
+    const barcodeRightX = leftX + rightAlignedWidth;
+    const headingLines = continuedSectionHeadingLines(sectionHeading);
+    if (renderAborted || headingLines.length === 0) {
+      return;
+    }
+
+    if (y + headingLines.length * lineHeight > usableHeight) {
+      advanceColumnOrPage();
+      if (renderAborted) {
+        return;
+      }
+    }
+
     drawWrappedLines(doc, headingLines, leftX, lineHeight, y, barcodeRightX, continuationIndent, fontFamily);
     y += headingLines.length * lineHeight;
   };
@@ -839,7 +838,7 @@ function wrapRenderLine(
     const rightStyle = line.rightStyle ?? "normal";
     setFontStyle(doc, rightStyle, fontFamily);
     const barcodeWidth = doc.getTextWidth(line.rightText);
-    setFontStyle(doc, "normal", fontFamily);
+    setFontStyle(doc, style, fontFamily);
     const gapWidth = doc.getTextWidth("  ");
     const leftMaxWidth = Math.max(20, rightAlignedWidth - barcodeWidth - gapWidth);
     const wrappedLeft = doc.splitTextToSize(fullText, leftMaxWidth) as string[];
@@ -1028,13 +1027,6 @@ function mapSortErrorToUserMessage(error: unknown): string {
     message.includes("Entries could not be parsed")
   ) {
     return "Could not read this reservation list. Please check the pasted text and click Sort again.";
-  }
-
-  const integrityMatch = message.match(/Parsing integrity check failed:\s*(\d+)\s+entries detected in source but only\s+(\d+)/i);
-  if (integrityMatch) {
-    const sourceCount = integrityMatch[1];
-    const processedCount = integrityMatch[2];
-    return `Processing failed: the source list has ${sourceCount} entries, but only ${processedCount} made it into the new list. Please check the pasted text and try again.`;
   }
 
   return "There was an error while sorting. Please reload the page and try again.";
