@@ -72,6 +72,8 @@ const MAX_INPUT_BYTES = 1_048_576;
 const MAX_RENDER_LINES = 12_000;
 const MAX_PDF_PAGES = 500;
 const FAIRY_FOLK_MYT_SEQUENCE = "Children's Fairy /Folk/Myt";
+const CHILDRENS_GRAPHIC_NOVELS_SEQUENCE = "Children's Graphic Novels";
+const TEEN_GRAPHIC_NOVELS_SEQUENCE = "Teen Graphic Novels";
 
 let latestResult: SortResult | null = null;
 let lastSortedSource: string | null = null;
@@ -333,7 +335,7 @@ function compareEntries(a: Entry, b: Entry): number {
     return specialSequenceCompare;
   }
 
-  if (isFairyFolkMytSequence(aSequenceForSort) && isFairyFolkMytSequence(bSequenceForSort)) {
+  if (isSpecialSequence(aSequenceForSort) && isSpecialSequence(bSequenceForSort)) {
     const shelfmarkCompare = compareText(a.shelfmark, b.shelfmark);
     if (shelfmarkCompare !== 0) {
       return shelfmarkCompare;
@@ -463,15 +465,40 @@ function normalizeSequenceForSorting(itemType: string, sequence: string): string
 }
 
 function compareSpecialSequenceBucket(aSequence: string, bSequence: string): number {
-  return specialSequenceBucketRank(aSequence) - specialSequenceBucketRank(bSequence);
+  const aSpecialName = specialSequenceName(aSequence);
+  const bSpecialName = specialSequenceName(bSequence);
+
+  if (!aSpecialName && !bSpecialName) {
+    return 0;
+  }
+
+  if (aSpecialName && !bSpecialName) {
+    return 1;
+  }
+
+  if (!aSpecialName && bSpecialName) {
+    return -1;
+  }
+
+  return compareText(aSpecialName!, bSpecialName!);
 }
 
-function specialSequenceBucketRank(sequence: string): number {
-  return isFairyFolkMytSequence(sequence) ? 0 : 1;
+function isSpecialSequence(sequence: string): boolean {
+  return specialSequenceName(sequence) !== null;
 }
 
-function isFairyFolkMytSequence(sequence: string): boolean {
-  return sequence.trim() === FAIRY_FOLK_MYT_SEQUENCE;
+function specialSequenceName(sequence: string): string | null {
+  const trimmed = sequence.trim();
+
+  if (
+    trimmed === FAIRY_FOLK_MYT_SEQUENCE ||
+    trimmed === CHILDRENS_GRAPHIC_NOVELS_SEQUENCE ||
+    trimmed === TEEN_GRAPHIC_NOVELS_SEQUENCE
+  ) {
+    return trimmed;
+  }
+
+  return null;
 }
 
 function buildDocument(
@@ -529,8 +556,9 @@ function buildRenderBlocks(entries: Entry[]): RenderBlock[] {
 }
 
 function formatGroupHeading(itemType: string, effectiveSequence: string): string {
-  if (isFairyFolkMytSequence(effectiveSequence)) {
-    return `${FAIRY_FOLK_MYT_SEQUENCE} —`;
+  const specialSequence = specialSequenceName(effectiveSequence);
+  if (specialSequence) {
+    return `${specialSequence} —`;
   }
 
   if (effectiveSequence.trim() === "") {
@@ -541,8 +569,9 @@ function formatGroupHeading(itemType: string, effectiveSequence: string): string
 }
 
 function renderGroupKey(itemType: string, effectiveSequence: string): string {
-  if (isFairyFolkMytSequence(effectiveSequence)) {
-    return `sequence\u0000${FAIRY_FOLK_MYT_SEQUENCE}`;
+  const specialSequence = specialSequenceName(effectiveSequence);
+  if (specialSequence) {
+    return `sequence\u0000${specialSequence}`;
   }
 
   return `${itemType}\u0000${effectiveSequence}`;
