@@ -87,6 +87,8 @@ saveSettingsButton.addEventListener("click", () => {
 });
 
 sourceText.addEventListener("input", () => {
+  hideStatus();
+
   if (lastSortedSource === null) {
     return;
   }
