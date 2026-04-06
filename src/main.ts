@@ -233,6 +233,7 @@ function parseList(input: string): ParseResult {
 function extractHeaderMetadata(headerLines: string[]): { libraryName: string; reportDate: string } {
   let libraryName = "Unknown Library";
   let reportDate = "Unknown date";
+  const reportTitle = "Reserved Items not on loan by site";
 
   for (const line of headerLines) {
     const libraryMatch = line.match(/^\s*Items at\s+(.+?)\s*$/i);
@@ -243,6 +244,25 @@ function extractHeaderMetadata(headerLines: string[]): { libraryName: string; re
     const dateMatch = line.match(/^\s*res_itm_noloan\s+(\d{2}\/\d{2}\/\d{2})\s*$/i);
     if (dateMatch) {
       reportDate = dateMatch[1];
+    }
+  }
+
+  if (reportDate === "Unknown date") {
+    for (let i = 0; i < headerLines.length; i += 1) {
+      const dateMatch = headerLines[i].match(/\b(\d{2}\/\d{2}\/\d{2})\b/);
+      if (!dateMatch) {
+        continue;
+      }
+
+      let j = i + 1;
+      while (j < headerLines.length && headerLines[j].trim() === "") {
+        j += 1;
+      }
+
+      if (j < headerLines.length && headerLines[j].trim().toLowerCase() === reportTitle.toLowerCase()) {
+        reportDate = dateMatch[1];
+        break;
+      }
     }
   }
 
@@ -1057,7 +1077,7 @@ function mapSortErrorToUserMessage(error: unknown): string {
     message.includes("Invalid entry start") ||
     message.includes("Entries could not be parsed")
   ) {
-    return "Could not read this reservation list. Please check the pasted text and click Sort again.";
+    return "Could not read this reservation list. Please check the pasted text and click Create PDFs again.";
   }
 
   return "There was an error while sorting. Please reload the page and try again.";
