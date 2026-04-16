@@ -1,3 +1,4 @@
+import JsBarcode from "jsbarcode";
 import { jsPDF } from "jspdf";
 
 type Audience = "adult" | "junior";
@@ -40,6 +41,8 @@ type RenderLine = {
   rightText?: string;
   rightStyle?: FontStyle;
   continuation?: boolean;
+  barcodeValue?: string;
+  barcodeTight?: boolean;
 };
 
 type RenderBlock = {
@@ -74,6 +77,14 @@ const MAX_PDF_PAGES = 500;
 const FAIRY_FOLK_MYT_SEQUENCE = "Children's Fairy /Folk/Myt";
 const CHILDRENS_GRAPHIC_NOVELS_SEQUENCE = "Children's Graphic Novels";
 const TEEN_GRAPHIC_NOVELS_SEQUENCE = "Teen Graphic Novels";
+const BARCODE_IMAGE_TARGET_WIDTH_PT = 92;
+const BARCODE_IMAGE_MIN_WIDTH_PT = 64;
+const BARCODE_IMAGE_HEIGHT_FACTOR = 0.9;
+const BARCODE_IMAGE_MIN_HEIGHT_PT = 12;
+const BARCODE_IMAGE_MAX_HEIGHT_PT = 18;
+const BARCODE_NORMAL_GAP_FACTOR = 2;
+const BARCODE_TIGHT_GAP_FACTOR = 1;
+const BARCODE_MIN_GAP_PT = 2;
 
 let latestResult: SortResult | null = null;
 let lastSortedSource: string | null = null;
@@ -82,8 +93,11 @@ let saveSettingsResetTimer: number | null = null;
 loadSavedSettings();
 
 saveSettingsButton.addEventListener("click", () => {
-  saveCurrentSettings();
-  showSavedSettingsFeedback();
+  if (saveCurrentSettings()) {
+    showSavedSettingsFeedback();
+  } else {
+    showError("Could not save settings in this browser.");
+  }
 });
 
 sourceText.addEventListener("input", () => {
@@ -173,7 +187,12 @@ downloadAdultButton.addEventListener("click", () => {
     return;
   }
 
-  downloadPdf("adult-list.pdf", latestResult.adultDoc, getPdfTextSize(), getPdfColumns(), getPdfFontFamily());
+  try {
+    downloadPdf("adult-list.pdf", latestResult.adultDoc, getPdfTextSize(), getPdfColumns(), getPdfFontFamily());
+  } catch (error) {
+    console.error(error);
+    showError("There was an error while creating the PDF. Please try again.");
+  }
 });
 
 downloadJuniorButton.addEventListener("click", () => {
@@ -182,7 +201,12 @@ downloadJuniorButton.addEventListener("click", () => {
     return;
   }
 
-  downloadPdf("junior-list.pdf", latestResult.juniorDoc, getPdfTextSize(), getPdfColumns(), getPdfFontFamily());
+  try {
+    downloadPdf("junior-list.pdf", latestResult.juniorDoc, getPdfTextSize(), getPdfColumns(), getPdfFontFamily());
+  } catch (error) {
+    console.error(error);
+    showError("There was an error while creating the PDF. Please try again.");
+  }
 });
 
 function parseList(input: string): ParseResult {
@@ -610,10 +634,12 @@ function buildEntryRenderLines(rawLines: string[]): RenderLine[] {
   const lines: RenderLine[] = [];
 
   if (firstMatch) {
+    const lineLabel = formatFirstRowLabel(firstMatch[1]);
     lines.push({
-      segments: [{ text: firstMatch[1].trimEnd(), style: "normal" }],
+      segments: [{ text: lineLabel, style: "normal" }],
       rightText: firstMatch[2],
       rightStyle: "normal",
+      barcodeValue: firstMatch[2],
     });
   } else {
     lines.push(makePlainLine(first));
@@ -621,17 +647,23 @@ function buildEntryRenderLines(rawLines: string[]): RenderLine[] {
 
   const remaining = nonBlank.slice(1).map((line) => line.replace(/^\s+/, ""));
   const metadataStart = remaining.findIndex((line) => isMetadataLine(line));
-  const titleIndex = metadataStart > 0 ? metadataStart - 1 : -1;
+  const contentBeforeMetadata = metadataStart >= 0 ? remaining.slice(0, metadataStart) : remaining;
+  const hasAuthorLine = (rawLines[1] ?? "").trim() !== "";
+  const authorLine = hasAuthorLine ? contentBeforeMetadata[0] ?? "" : "";
+  const titleLines = hasAuthorLine ? contentBeforeMetadata.slice(1) : contentBeforeMetadata;
+  const joinedTitle = titleLines.join(" ").trim();
 
-  for (let i = 0; i < remaining.length; i += 1) {
-    const line = remaining[i];
+  if (authorLine.trim() !== "") {
+    lines.push(makePlainLine(authorLine));
+  }
 
+  if (joinedTitle !== "") {
+    lines.push(makeStyledLine(joinedTitle, "italic"));
+  }
+
+  const metadataLines = metadataStart >= 0 ? remaining.slice(metadataStart) : [];
+  for (const line of metadataLines) {
     if (shouldOmitEntryLine(line)) {
-      continue;
-    }
-
-    if (i === titleIndex) {
-      lines.push(makeStyledLine(line, "italic"));
       continue;
     }
 
@@ -651,11 +683,12 @@ function downloadPdf(
   const doc = new jsPDF({ unit: "pt", format: "a4" });
   doc.setFont(fontFamily, "normal");
   doc.setFontSize(textSizePt);
+  const barcodeImageCache = new Map<string, string>();
 
   const margin = 36;
   const textHeight = doc.getTextDimensions("Mg").h;
   const lineHeight = Math.ceil(textHeight * 1.25);
-  const fitSlack = Math.floor(lineHeight * 0.6);
+  const fitSlack = Math.min(4, Math.floor(lineHeight * 0.2));
   const pageWidth = doc.internal.pageSize.getWidth();
   const pageHeight = doc.internal.pageSize.getHeight();
   const maxTextWidth = pageWidth - margin * 2;
@@ -667,7 +700,7 @@ function downloadPdf(
   const rightAlignedWidth = Math.min(columnWidth, reportLineWidth);
 
   const footerY = pageHeight - 16;
-  const usableHeight = footerY - margin;
+  const contentBottomY = footerY;
 
   const wrappedTitle = wrapRenderLine(doc, makeStyledLine(docModel.title, "bold"), maxTextWidth, maxTextWidth, fontFamily);
   const wrappedBlocks = docModel.blocks.map((block) => ({
@@ -709,7 +742,7 @@ function downloadPdf(
       makePlainLine(""),
     ];
 
-    if (headingLines.length * lineHeight > usableHeight) {
+    if (totalRenderHeight(headingLines, lineHeight) > contentBottomY - contentStartY) {
       abortRender("Section heading is too long to render safely. Please reduce heading length and try again.");
       return [];
     }
@@ -725,15 +758,15 @@ function downloadPdf(
       return;
     }
 
-    if (y + headingLines.length * lineHeight > usableHeight) {
+    if (y + totalRenderHeight(headingLines, lineHeight) > contentBottomY) {
       advanceColumnOrPage();
       if (renderAborted) {
         return;
       }
     }
 
-    drawWrappedLines(doc, headingLines, leftX, lineHeight, y, barcodeRightX, continuationIndent, fontFamily);
-    y += headingLines.length * lineHeight;
+    drawWrappedLines(doc, headingLines, leftX, lineHeight, y, barcodeRightX, continuationIndent, fontFamily, textHeight, barcodeImageCache);
+    y += totalRenderHeight(headingLines, lineHeight);
   };
 
   const advanceColumnOrPage = (): boolean => {
@@ -762,8 +795,8 @@ function downloadPdf(
   const drawOneLine = (line: RenderLine): void => {
     const leftX = columnStartXs[columnIndex];
     const barcodeRightX = leftX + rightAlignedWidth;
-    drawWrappedLines(doc, [line], leftX, lineHeight, y, barcodeRightX, continuationIndent, fontFamily);
-    y += lineHeight;
+    drawWrappedLines(doc, [line], leftX, lineHeight, y, barcodeRightX, continuationIndent, fontFamily, textHeight, barcodeImageCache);
+    y += renderLineHeight(line, lineHeight);
   };
 
   for (const block of wrappedBlocks) {
@@ -771,21 +804,21 @@ function downloadPdf(
     const trailingBlankCount = countTrailingBlankLines(linesToDraw);
     if (trailingBlankCount > 0) {
       const trimmedLines = linesToDraw.slice(0, linesToDraw.length - trailingBlankCount);
-      const fullHeight = linesToDraw.length * lineHeight;
-      const trimmedHeight = trimmedLines.length * lineHeight;
-      const remaining = usableHeight - y;
+      const fullHeight = totalRenderHeight(linesToDraw, lineHeight);
+      const trimmedHeight = totalRenderHeight(trimmedLines, lineHeight);
+      const remaining = contentBottomY - y;
 
       if (fullHeight > remaining + fitSlack && trimmedHeight <= remaining + fitSlack) {
         linesToDraw = trimmedLines;
       }
     }
 
-    const blockHeight = linesToDraw.length * lineHeight;
-    const remaining = usableHeight - y;
+    const blockHeight = totalRenderHeight(linesToDraw, lineHeight);
+    const remaining = contentBottomY - y;
 
-    if (blockHeight > usableHeight) {
+    if (blockHeight > contentBottomY - contentStartY) {
       for (const line of linesToDraw) {
-        if (y + lineHeight > usableHeight) {
+        if (y + renderLineHeight(line, lineHeight) > contentBottomY) {
           const movedToNewPage = advanceColumnOrPage();
           if (renderAborted) {
             return;
@@ -812,7 +845,7 @@ function downloadPdf(
 
       const leftX = columnStartXs[columnIndex];
       const barcodeRightX = leftX + rightAlignedWidth;
-      drawWrappedLines(doc, linesToDraw, leftX, lineHeight, y, barcodeRightX, continuationIndent, fontFamily);
+      drawWrappedLines(doc, linesToDraw, leftX, lineHeight, y, barcodeRightX, continuationIndent, fontFamily, textHeight, barcodeImageCache);
       y += blockHeight;
     }
   }
@@ -890,8 +923,66 @@ function wrapRenderLine(
     setFontStyle(doc, rightStyle, fontFamily);
     const barcodeWidth = doc.getTextWidth(line.rightText);
     setFontStyle(doc, style, fontFamily);
-    const gapWidth = doc.getTextWidth("  ");
-    const leftMaxWidth = Math.max(20, rightAlignedWidth - barcodeWidth - gapWidth);
+    const normalGapWidth = Math.max(BARCODE_MIN_GAP_PT, doc.getTextWidth(" ") * BARCODE_NORMAL_GAP_FACTOR);
+    const tightGapWidth = Math.max(BARCODE_MIN_GAP_PT, doc.getTextWidth(" ") * BARCODE_TIGHT_GAP_FACTOR);
+    const barcodeImageWidth = line.barcodeValue ? barcodeImageWidthPt(rightAlignedWidth) : 0;
+
+    if (line.barcodeValue) {
+      const labelWidth = doc.getTextWidth(fullText);
+      const continuationIndentWidth = Math.max(BARCODE_MIN_GAP_PT, doc.getTextWidth("0") * 2);
+      const fullLineWidth = labelWidth + normalGapWidth + barcodeImageWidth + normalGapWidth + barcodeWidth;
+      if (fullLineWidth <= rightAlignedWidth) {
+        return [{ segments: [{ text: fullText, style }], rightText: line.rightText, rightStyle, barcodeValue: line.barcodeValue }];
+      }
+
+      const tightLineWidth = labelWidth + tightGapWidth + barcodeImageWidth + tightGapWidth + barcodeWidth;
+      if (tightLineWidth <= rightAlignedWidth) {
+        return [{
+          segments: [{ text: fullText, style }],
+          rightText: line.rightText,
+          rightStyle,
+          barcodeValue: line.barcodeValue,
+          barcodeTight: true,
+        }];
+      }
+
+      const firstLineWidth = labelWidth + tightGapWidth + barcodeImageWidth;
+      if (firstLineWidth <= rightAlignedWidth) {
+        return [
+          { segments: [{ text: fullText, style }], barcodeValue: line.barcodeValue, barcodeTight: true },
+          { segments: [{ text: "", style }], rightText: line.rightText, rightStyle, continuation: true },
+        ];
+      }
+
+      const finalLabelWidth = Math.max(20, rightAlignedWidth - barcodeImageWidth - tightGapWidth - continuationIndentWidth);
+      const wrappedLeft = doc.splitTextToSize(fullText, finalLabelWidth) as string[];
+
+      if (wrappedLeft.length <= 1) {
+        return [
+          { segments: [{ text: wrappedLeft[0] ?? fullText, style }], barcodeValue: line.barcodeValue, barcodeTight: true },
+          { segments: [{ text: "", style }], rightText: line.rightText, rightStyle, continuation: true },
+        ];
+      }
+
+      const prefix = wrappedLeft.slice(0, -1).map((text, index) => ({
+        segments: [{ text, style }],
+        continuation: index > 0,
+      }));
+      const finalLabelLine: RenderLine = {
+        segments: [{ text: wrappedLeft[wrappedLeft.length - 1], style }],
+        barcodeValue: line.barcodeValue,
+        continuation: true,
+        barcodeTight: true,
+      };
+
+      return [
+        ...prefix,
+        finalLabelLine,
+        { segments: [{ text: "", style }], rightText: line.rightText, rightStyle, continuation: true },
+      ];
+    }
+
+    const leftMaxWidth = Math.max(20, rightAlignedWidth - barcodeWidth - tightGapWidth);
     const wrappedLeft = doc.splitTextToSize(fullText, leftMaxWidth) as string[];
 
     if (wrappedLeft.length <= 1) {
@@ -934,11 +1025,14 @@ function drawWrappedLines(
   barcodeRightX: number,
   continuationIndent: number,
   fontFamily: PdfFontFamily,
+  textHeight: number,
+  barcodeImageCache: Map<string, string>,
 ): void {
   let y = startY;
 
   for (const line of lines) {
     let x = margin + (line.continuation ? continuationIndent : 0);
+    const currentLineHeight = renderLineHeight(line, lineHeight);
     for (const segment of line.segments) {
       if (segment.text === "") {
         continue;
@@ -949,12 +1043,28 @@ function drawWrappedLines(
       x += doc.getTextWidth(segment.text);
     }
 
+    if (line.barcodeValue) {
+      const normalGapWidth = Math.max(BARCODE_MIN_GAP_PT, doc.getTextWidth(" ") * BARCODE_NORMAL_GAP_FACTOR);
+      const tightGapWidth = Math.max(BARCODE_MIN_GAP_PT, doc.getTextWidth(" ") * BARCODE_TIGHT_GAP_FACTOR);
+      const gapWidth = line.barcodeTight ? tightGapWidth : normalGapWidth;
+      const imageWidth = barcodeImageWidthPt(barcodeRightX - margin);
+      const imageHeight = barcodeImageHeightPt(lineHeight);
+      const rightTextWidth = doc.getTextWidth(line.rightText ?? "");
+      const centeredX = x + Math.max(0, (barcodeRightX - rightTextWidth - x - imageWidth) / 2);
+      const minImageX = x + gapWidth;
+      const maxImageX = barcodeRightX - rightTextWidth - gapWidth - imageWidth;
+      const imageX = Math.max(minImageX, Math.min(centeredX, maxImageX));
+      const imageY = y - textHeight + Math.max(0, (currentLineHeight - imageHeight) / 2);
+      const barcodeDataUrl = getBarcodeDataUrl(line.barcodeValue, imageWidth, imageHeight, barcodeImageCache);
+      doc.addImage(barcodeDataUrl, "PNG", imageX, imageY, imageWidth, imageHeight);
+    }
+
     if (line.rightText) {
       setFontStyle(doc, line.rightStyle ?? "normal", fontFamily);
       doc.text(line.rightText, barcodeRightX, y, { align: "right" });
     }
 
-    y += lineHeight;
+    y += currentLineHeight;
   }
 }
 
@@ -1006,6 +1116,72 @@ function countTrailingBlankLines(lines: RenderLine[]): number {
   return count;
 }
 
+function renderLineHeight(line: RenderLine, baseLineHeight: number): number {
+  if (!line.barcodeValue) {
+    return baseLineHeight;
+  }
+
+  return Math.max(baseLineHeight, barcodeImageHeightPt(baseLineHeight) + 4);
+}
+
+function totalRenderHeight(lines: RenderLine[], baseLineHeight: number): number {
+  return lines.reduce((sum, line) => sum + renderLineHeight(line, baseLineHeight), 0);
+}
+
+function barcodeImageWidthPt(availableWidth: number): number {
+  return Math.max(BARCODE_IMAGE_MIN_WIDTH_PT, Math.min(BARCODE_IMAGE_TARGET_WIDTH_PT, availableWidth * 0.32));
+}
+
+function barcodeImageHeightPt(baseLineHeight: number): number {
+  return Math.max(BARCODE_IMAGE_MIN_HEIGHT_PT, Math.min(BARCODE_IMAGE_MAX_HEIGHT_PT, baseLineHeight * BARCODE_IMAGE_HEIGHT_FACTOR));
+}
+
+function getBarcodeDataUrl(barcodeValue: string, widthPt: number, heightPt: number, cache: Map<string, string>): string {
+  const cacheKey = `${barcodeValue}:${Math.round(widthPt)}:${Math.round(heightPt)}`;
+  const cached = cache.get(cacheKey);
+  if (cached) {
+    return cached;
+  }
+
+  try {
+    const canvas = document.createElement("canvas");
+    const scale = 2;
+    const widthPx = Math.max(160, Math.round(widthPt * scale));
+    const heightPx = Math.max(52, Math.round(heightPt * scale));
+    canvas.width = widthPx;
+    canvas.height = heightPx;
+    const moduleWidth = Math.max(1, Math.round(widthPt / 40));
+
+    JsBarcode(canvas, barcodeValue, {
+      format: "CODE128",
+      displayValue: false,
+      margin: 0,
+      width: moduleWidth,
+      height: Math.max(28, heightPx - 6),
+    });
+
+    const dataUrl = canvas.toDataURL("image/png");
+    cache.set(cacheKey, dataUrl);
+    return dataUrl;
+  } catch (error) {
+    throw new Error(
+      `Barcode rendering failed for ${barcodeValue}: ${error instanceof Error ? error.message : "unknown error"}`,
+    );
+  }
+}
+
+function formatFirstRowLabel(preBarcode: string): string {
+  const trimmed = preBarcode.trim();
+  if (trimmed === "") {
+    return trimmed;
+  }
+
+  const parts = trimmed.split(/\s+/);
+  const shelfmark = parts[0] ?? "";
+  const suffix = parts.slice(1).join(" ");
+  return suffix ? `${shelfmark}/${suffix}` : shelfmark;
+}
+
 function setFontStyle(doc: jsPDF, style: FontStyle, fontFamily: PdfFontFamily): void {
   doc.setFont(fontFamily, style === "italic" ? "italic" : style === "bold" ? "bold" : "normal");
 }
@@ -1035,7 +1211,7 @@ function loadSavedSettings(): void {
   }
 }
 
-function saveCurrentSettings(): void {
+function saveCurrentSettings(): boolean {
   const settings = {
     font: getPdfFontFamily(),
     textSize: String(getPdfTextSize()),
@@ -1044,8 +1220,9 @@ function saveCurrentSettings(): void {
 
   try {
     window.localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(settings));
+    return true;
   } catch {
-    return;
+    return false;
   }
 }
 
