@@ -24,8 +24,10 @@ type SortResult = {
   originalCount: number;
   adultCount: number;
   juniorCount: number;
-  adultDoc: RenderDocument;
-  juniorDoc: RenderDocument;
+  adultDoc?: RenderDocument;
+  juniorDoc?: RenderDocument;
+  combinedDoc?: RenderDocument;
+  combinedLibrary: boolean;
 };
 
 type FontStyle = "normal" | "bold" | "italic";
@@ -65,10 +67,12 @@ const sortButton = mustGet<HTMLButtonElement>("sortButton");
 const downloadActions = mustGet<HTMLElement>("downloadActions");
 const downloadAdultButton = mustGet<HTMLButtonElement>("downloadAdultButton");
 const downloadJuniorButton = mustGet<HTMLButtonElement>("downloadJuniorButton");
+const downloadCombinedButton = mustGet<HTMLButtonElement>("downloadCombinedButton");
 const statusPanel = mustGet<HTMLElement>("statusPanel");
 
 const BARCODE_PATTERN = "30120\\d+";
 const entryStartRegex = new RegExp(`^\\s*(.*?)\\s+(${BARCODE_PATTERN})\\s*$`);
+const RESERVED_AT_LINE_REGEX = /^\s*Reserved at\s*:/i;
 const reportLineColumns = 45;
 const SETTINGS_STORAGE_KEY = "resListSettings";
 const MAX_INPUT_BYTES = 1_048_576;
@@ -85,6 +89,8 @@ const BARCODE_IMAGE_MAX_HEIGHT_PT = 18;
 const BARCODE_NORMAL_GAP_FACTOR = 2;
 const BARCODE_TIGHT_GAP_FACTOR = 1;
 const BARCODE_MIN_GAP_PT = 2;
+const LEWIS_CARROLL_SHORT_NAME = "Lewis Carroll Libr";
+const LEWIS_CARROLL_FULL_NAME = "Lewis Carroll Library";
 
 let latestResult: SortResult | null = null;
 let lastSortedSource: string | null = null;
@@ -174,6 +180,7 @@ sortButton.addEventListener("click", () => {
     showOk(statusLine);
     lastSortedSource = sourceText.value;
 
+    updateDownloadButtons(sorted);
     downloadActions.classList.remove("hidden");
   } catch (error) {
     console.error(error);
@@ -182,7 +189,7 @@ sortButton.addEventListener("click", () => {
 });
 
 downloadAdultButton.addEventListener("click", () => {
-  if (!latestResult) {
+  if (!latestResult || !latestResult.adultDoc) {
     showError("There was an error. Please reload the page and try again.");
     return;
   }
@@ -196,13 +203,27 @@ downloadAdultButton.addEventListener("click", () => {
 });
 
 downloadJuniorButton.addEventListener("click", () => {
-  if (!latestResult) {
+  if (!latestResult || !latestResult.juniorDoc) {
     showError("There was an error. Please reload the page and try again.");
     return;
   }
 
   try {
     downloadPdf("junior-list.pdf", latestResult.juniorDoc, getPdfTextSize(), getPdfColumns(), getPdfFontFamily());
+  } catch (error) {
+    console.error(error);
+    showError("There was an error while creating the PDF. Please try again.");
+  }
+});
+
+downloadCombinedButton.addEventListener("click", () => {
+  if (!latestResult || !latestResult.combinedDoc) {
+    showError("There was an error. Please reload the page and try again.");
+    return;
+  }
+
+  try {
+    downloadPdf("reservation-list.pdf", latestResult.combinedDoc, getPdfTextSize(), getPdfColumns(), getPdfFontFamily());
   } catch (error) {
     console.error(error);
     showError("There was an error while creating the PDF. Please try again.");
@@ -290,11 +311,16 @@ function extractHeaderMetadata(headerLines: string[]): { libraryName: string; re
     }
   }
 
+  if (isLewisCarrollLibrary(libraryName)) {
+    libraryName = LEWIS_CARROLL_FULL_NAME;
+  }
+
   return { libraryName, reportDate };
 }
 
 function parseEntry(rawLines: string[], originalIndex: number): Entry {
-  const firstLine = rawLines[0] ?? "";
+  const trimmedRawLines = trimEntryAfterReservedAt(rawLines);
+  const firstLine = trimmedRawLines[0] ?? "";
   const match = firstLine.match(entryStartRegex);
 
   if (!match) {
@@ -304,13 +330,13 @@ function parseEntry(rawLines: string[], originalIndex: number): Entry {
   const preBarcode = match[1].trim();
   const barcode = match[2];
   const shelfmark = preBarcode.split(/\s+/)[0] ?? "";
-  const author = (rawLines[1] ?? "").trim();
-  const itemType = findField(rawLines, "Item Type");
-  const sequence = findField(rawLines, "Sequence");
+  const author = (trimmedRawLines[1] ?? "").trim();
+  const itemType = findField(trimmedRawLines, "Item Type");
+  const sequence = findField(trimmedRawLines, "Sequence");
   const audience = classifyAudience(itemType, sequence);
 
   return {
-    rawLines,
+    rawLines: trimmedRawLines,
     barcode,
     shelfmark,
     author,
@@ -319,6 +345,15 @@ function parseEntry(rawLines: string[], originalIndex: number): Entry {
     audience,
     originalIndex,
   };
+}
+
+function trimEntryAfterReservedAt(rawLines: string[]): string[] {
+  const reservedAtIndex = rawLines.findIndex((line) => RESERVED_AT_LINE_REGEX.test(line));
+  if (reservedAtIndex === -1) {
+    return rawLines;
+  }
+
+  return rawLines.slice(0, reservedAtIndex + 1);
 }
 
 function findField(lines: string[], fieldName: string): string {
@@ -360,6 +395,21 @@ function buildSortedLists(parsed: ParseResult): SortResult {
   const adultCount = adultEntries.length;
   const juniorCount = juniorEntries.length;
 
+  const combinedLibrary = isLewisCarrollLibrary(parsed.libraryName);
+
+  if (combinedLibrary) {
+    const combinedEntries = [...adultEntries, ...juniorEntries];
+    const combinedDoc = buildDocument("", parsed.libraryName, parsed.reportDate, combinedEntries, true);
+
+    return {
+      originalCount,
+      adultCount,
+      juniorCount,
+      combinedDoc,
+      combinedLibrary: true,
+    };
+  }
+
   const adultDoc = buildDocument("Adult", parsed.libraryName, parsed.reportDate, adultEntries);
   const juniorDoc = buildDocument("Junior", parsed.libraryName, parsed.reportDate, juniorEntries);
 
@@ -369,6 +419,7 @@ function buildSortedLists(parsed: ParseResult): SortResult {
     juniorCount,
     adultDoc,
     juniorDoc,
+    combinedLibrary: false,
   };
 }
 
@@ -552,10 +603,31 @@ function buildDocument(
   libraryName: string,
   reportDate: string,
   entries: Entry[],
+  combinedList = false,
 ): RenderDocument {
-  const title = `${audienceLabel} reservation list — ${libraryName} — ${reportDate}`;
+  const title = combinedList
+    ? `Reservation List - ${libraryName} - ${reportDate}`
+    : `${audienceLabel} reservation list — ${libraryName} — ${reportDate}`;
   const blocks = buildRenderBlocks(entries);
   return { title, blocks };
+}
+
+function isLewisCarrollLibrary(libraryName: string): boolean {
+  return libraryName.trim().toLowerCase() === LEWIS_CARROLL_SHORT_NAME.toLowerCase() ||
+    libraryName.trim().toLowerCase() === LEWIS_CARROLL_FULL_NAME.toLowerCase();
+}
+
+function updateDownloadButtons(sorted: SortResult): void {
+  if (sorted.combinedLibrary) {
+    downloadAdultButton.classList.add("hidden");
+    downloadJuniorButton.classList.add("hidden");
+    downloadCombinedButton.classList.remove("hidden");
+    return;
+  }
+
+  downloadAdultButton.classList.remove("hidden");
+  downloadJuniorButton.classList.remove("hidden");
+  downloadCombinedButton.classList.add("hidden");
 }
 
 function buildRenderBlocks(entries: Entry[]): RenderBlock[] {
@@ -1273,6 +1345,9 @@ function showError(message: string): void {
 
 function resetDownloads(): void {
   downloadActions.classList.add("hidden");
+  downloadAdultButton.classList.add("hidden");
+  downloadJuniorButton.classList.add("hidden");
+  downloadCombinedButton.classList.add("hidden");
 }
 
 function hideStatus(): void {

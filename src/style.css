@@ -114,7 +114,8 @@ button:hover {
 }
 
 #downloadAdultButton,
-#downloadJuniorButton {
+#downloadJuniorButton,
+#downloadCombinedButton {
   background: #1f3a63;
   color: #fff;
   font-weight: 700;
