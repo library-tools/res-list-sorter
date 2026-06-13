@@ -7,6 +7,7 @@ type Entry = {
   rawLines: string[];
   barcode: string;
   shelfmark: string;
+  shelfSuffix: string;
   author: string;
   itemType: string;
   sequence: string;
@@ -81,6 +82,7 @@ const MAX_PDF_PAGES = 500;
 const FAIRY_FOLK_MYT_SEQUENCE = "Children's Fairy /Folk/Myt";
 const CHILDRENS_GRAPHIC_NOVELS_SEQUENCE = "Children's Graphic Novels";
 const TEEN_GRAPHIC_NOVELS_SEQUENCE = "Teen Graphic Novels";
+const CLASSICS_SEQUENCE = "Classics";
 const BARCODE_IMAGE_TARGET_WIDTH_PT = 92;
 const BARCODE_IMAGE_MIN_WIDTH_PT = 64;
 const BARCODE_IMAGE_HEIGHT_FACTOR = 0.9;
@@ -329,7 +331,9 @@ function parseEntry(rawLines: string[], originalIndex: number): Entry {
 
   const preBarcode = match[1].trim();
   const barcode = match[2];
-  const shelfmark = preBarcode.split(/\s+/)[0] ?? "";
+  const shelfParts = preBarcode.split(/\s+/);
+  const shelfmark = shelfParts[0] ?? "";
+  const shelfSuffix = shelfParts.slice(1).join(" ");
   const author = (trimmedRawLines[1] ?? "").trim();
   const itemType = findField(trimmedRawLines, "Item Type");
   const sequence = findField(trimmedRawLines, "Sequence");
@@ -339,6 +343,7 @@ function parseEntry(rawLines: string[], originalIndex: number): Entry {
     rawLines: trimmedRawLines,
     barcode,
     shelfmark,
+    shelfSuffix,
     author,
     itemType,
     sequence,
@@ -424,8 +429,8 @@ function buildSortedLists(parsed: ParseResult): SortResult {
 }
 
 function compareEntries(a: Entry, b: Entry): number {
-  const aSequenceForSort = normalizeSequenceForSorting(a.itemType, a.sequence);
-  const bSequenceForSort = normalizeSequenceForSorting(b.itemType, b.sequence);
+  const aSequenceForSort = normalizeSequenceForSorting(a.itemType, a.sequence, a.shelfSuffix);
+  const bSequenceForSort = normalizeSequenceForSorting(b.itemType, b.sequence, b.shelfSuffix);
 
   const specialSequenceCompare = compareSpecialSequenceBucket(aSequenceForSort, bSequenceForSort);
   if (specialSequenceCompare !== 0) {
@@ -535,7 +540,11 @@ function compareSequence(a: string, b: string): number {
   return compareText(a, b);
 }
 
-function normalizeSequenceForSorting(itemType: string, sequence: string): string {
+function normalizeSequenceForSorting(itemType: string, sequence: string, shelfSuffix: string): string {
+  if (isClassicsSuffix(shelfSuffix)) {
+    return CLASSICS_SEQUENCE;
+  }
+
   if (!/^adult fiction$/i.test(itemType.trim())) {
     return sequence;
   }
@@ -559,6 +568,10 @@ function normalizeSequenceForSorting(itemType: string, sequence: string): string
   }
 
   return sequence;
+}
+
+function isClassicsSuffix(shelfSuffix: string): boolean {
+  return shelfSuffix.trim().toLowerCase() === CLASSICS_SEQUENCE.toLowerCase();
 }
 
 function compareSpecialSequenceBucket(aSequence: string, bSequence: string): number {
@@ -636,7 +649,7 @@ function buildRenderBlocks(entries: Entry[]): RenderBlock[] {
   let currentSectionHeading: RenderLine | null = null;
 
   for (const entry of entries) {
-    const effectiveSequence = normalizeSequenceForSorting(entry.itemType, entry.sequence);
+    const effectiveSequence = normalizeSequenceForSorting(entry.itemType, entry.sequence, entry.shelfSuffix);
     const groupKey = renderGroupKey(entry.itemType, effectiveSequence);
 
     const cleanedEntryLines = buildEntryRenderLines(entry.rawLines);
