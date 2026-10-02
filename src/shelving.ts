@@ -17,6 +17,7 @@ const FAIRY_FOLK_MYT_SEQUENCE = "Children's Fairy /Folk/Myt";
 const CHILDRENS_GRAPHIC_NOVELS_SEQUENCE = "Children's Graphic Novels";
 const TEEN_GRAPHIC_NOVELS_SEQUENCE = "Teen Graphic Novels";
 const CLASSICS_SEQUENCE = "Classics";
+const CLASSICS_AND_CULT_SEQUENCE = "Classics/Cult";
 
 export function compareEntries(a: Entry, b: Entry, options: ShelvingOptions): number {
   const aSequenceForSort = effectiveSequence(a, options);
@@ -134,12 +135,14 @@ export function effectiveSequence(entry: Entry, options: ShelvingOptions): strin
   const { itemType, sequence, shelfSuffix } = entry;
 
   if (options.classicsSeparate) {
+    const classicsSection = options.cultWithClassics ? CLASSICS_AND_CULT_SEQUENCE : CLASSICS_SEQUENCE;
+
     if (isClassicsSuffix(shelfSuffix)) {
-      return CLASSICS_SEQUENCE;
+      return classicsSection;
     }
 
     if (options.cultWithClassics && isCultSuffix(shelfSuffix)) {
-      return CLASSICS_SEQUENCE;
+      return classicsSection;
     }
   }
 
