@@ -82,13 +82,13 @@ textarea {
 .shelvingOptions {
   border: 1px solid var(--border);
   border-radius: 10px;
-  padding: 10px 16px 14px;
+  padding: 10px 16px;
   margin: 0 0 14px;
   font-size: 1.1rem;
 }
 
-.shelvingOptions legend {
-  padding: 0 6px;
+.shelvingOptions summary {
+  cursor: pointer;
 }
 
 .shelvingQuestion {
