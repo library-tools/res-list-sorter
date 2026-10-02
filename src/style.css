@@ -88,7 +88,6 @@ textarea {
 }
 
 .shelvingOptions legend {
-  font-weight: 700;
   padding: 0 6px;
 }
 
@@ -100,8 +99,15 @@ textarea {
   margin-top: 10px;
 }
 
-.shelvingQuestion label {
-  font-weight: 700;
+.shelvingSubOption {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: 16px;
+}
+
+.shelvingSubOption.hidden {
+  display: none;
 }
 
 .shelvingQuestion input[type="checkbox"] {
