@@ -1,19 +1,13 @@
 import JsBarcode from "jsbarcode";
 import { jsPDF } from "jspdf";
-
-type Audience = "adult" | "junior";
-
-type Entry = {
-  rawLines: string[];
-  barcode: string;
-  shelfmark: string;
-  shelfSuffix: string;
-  author: string;
-  itemType: string;
-  sequence: string;
-  audience: Audience;
-  originalIndex: number;
-};
+import {
+  compareEntries,
+  DEFAULT_SHELVING_OPTIONS,
+  effectiveSequence,
+  specialSequenceName,
+  type ShelvingOptions,
+} from "./shelving";
+import type { Audience, Entry } from "./types";
 
 type ParseResult = {
   libraryName: string;
@@ -63,6 +57,10 @@ const sourceText = mustGet<HTMLTextAreaElement>("sourceText");
 const pdfFont = mustGet<HTMLSelectElement>("pdfFont");
 const pdfTextSize = mustGet<HTMLSelectElement>("pdfTextSize");
 const pdfColumns = mustGet<HTMLSelectElement>("pdfColumns");
+const classicsSeparate = mustGet<HTMLSelectElement>("classicsSeparate");
+const cultWithClassicsRow = mustGet<HTMLElement>("cultWithClassicsRow");
+const cultWithClassics = mustGet<HTMLInputElement>("cultWithClassics");
+const thrillersWith = mustGet<HTMLSelectElement>("thrillersWith");
 const saveSettingsButton = mustGet<HTMLButtonElement>("saveSettingsButton");
 const sortButton = mustGet<HTMLButtonElement>("sortButton");
 const downloadActions = mustGet<HTMLElement>("downloadActions");
@@ -79,10 +77,6 @@ const SETTINGS_STORAGE_KEY = "resListSettings";
 const MAX_INPUT_BYTES = 1_048_576;
 const MAX_RENDER_LINES = 12_000;
 const MAX_PDF_PAGES = 500;
-const FAIRY_FOLK_MYT_SEQUENCE = "Children's Fairy /Folk/Myt";
-const CHILDRENS_GRAPHIC_NOVELS_SEQUENCE = "Children's Graphic Novels";
-const TEEN_GRAPHIC_NOVELS_SEQUENCE = "Teen Graphic Novels";
-const CLASSICS_SEQUENCE = "Classics";
 const BARCODE_IMAGE_TARGET_WIDTH_PT = 92;
 const BARCODE_IMAGE_MIN_WIDTH_PT = 64;
 const BARCODE_IMAGE_HEIGHT_FACTOR = 0.9;
@@ -123,32 +117,17 @@ sourceText.addEventListener("input", () => {
   }
 });
 
-pdfTextSize.addEventListener("change", () => {
-  if (!downloadActions.classList.contains("hidden")) {
-    resetDownloads();
-    latestResult = null;
-    lastSortedSource = null;
-    hideStatus();
-  }
-});
-
-pdfFont.addEventListener("change", () => {
-  if (!downloadActions.classList.contains("hidden")) {
-    resetDownloads();
-    latestResult = null;
-    lastSortedSource = null;
-    hideStatus();
-  }
-});
-
-pdfColumns.addEventListener("change", () => {
-  if (!downloadActions.classList.contains("hidden")) {
-    resetDownloads();
-    latestResult = null;
-    lastSortedSource = null;
-    hideStatus();
-  }
-});
+for (const control of [pdfTextSize, pdfFont, pdfColumns, classicsSeparate, cultWithClassics, thrillersWith]) {
+  control.addEventListener("change", () => {
+    updateCultCheckboxVisibility();
+    if (!downloadActions.classList.contains("hidden")) {
+      resetDownloads();
+      latestResult = null;
+      lastSortedSource = null;
+      hideStatus();
+    }
+  });
+}
 
 sortButton.addEventListener("click", () => {
   resetDownloads();
@@ -171,7 +150,7 @@ sortButton.addEventListener("click", () => {
 
   try {
     const parsed = parseList(source);
-    const sorted = buildSortedLists(parsed);
+    const sorted = buildSortedLists(parsed, getShelvingOptions());
     latestResult = sorted;
 
     const statusLine =
@@ -391,10 +370,10 @@ function classifyAudience(itemType: string, sequence: string): Audience {
   return "adult";
 }
 
-function buildSortedLists(parsed: ParseResult): SortResult {
+function buildSortedLists(parsed: ParseResult, options: ShelvingOptions): SortResult {
   const allEntries = parsed.entries;
-  const adultEntries = allEntries.filter((entry) => entry.audience === "adult").sort(compareEntries);
-  const juniorEntries = allEntries.filter((entry) => entry.audience === "junior").sort(compareEntries);
+  const adultEntries = allEntries.filter((entry) => entry.audience === "adult").sort((a, b) => compareEntries(a, b, options));
+  const juniorEntries = allEntries.filter((entry) => entry.audience === "junior").sort((a, b) => compareEntries(a, b, options));
 
   const originalCount = allEntries.length;
   const adultCount = adultEntries.length;
@@ -404,7 +383,7 @@ function buildSortedLists(parsed: ParseResult): SortResult {
 
   if (combinedLibrary) {
     const combinedEntries = [...adultEntries, ...juniorEntries];
-    const combinedDoc = buildDocument("", parsed.libraryName, parsed.reportDate, combinedEntries, true);
+    const combinedDoc = buildDocument("", parsed.libraryName, parsed.reportDate, combinedEntries, options, true);
 
     return {
       originalCount,
@@ -415,8 +394,8 @@ function buildSortedLists(parsed: ParseResult): SortResult {
     };
   }
 
-  const adultDoc = buildDocument("Adult", parsed.libraryName, parsed.reportDate, adultEntries);
-  const juniorDoc = buildDocument("Junior", parsed.libraryName, parsed.reportDate, juniorEntries);
+  const adultDoc = buildDocument("Adult", parsed.libraryName, parsed.reportDate, adultEntries, options);
+  const juniorDoc = buildDocument("Junior", parsed.libraryName, parsed.reportDate, juniorEntries, options);
 
   return {
     originalCount,
@@ -428,200 +407,18 @@ function buildSortedLists(parsed: ParseResult): SortResult {
   };
 }
 
-function compareEntries(a: Entry, b: Entry): number {
-  const aSequenceForSort = normalizeSequenceForSorting(a.itemType, a.sequence, a.shelfSuffix);
-  const bSequenceForSort = normalizeSequenceForSorting(b.itemType, b.sequence, b.shelfSuffix);
-
-  const specialSequenceCompare = compareSpecialSequenceBucket(aSequenceForSort, bSequenceForSort);
-  if (specialSequenceCompare !== 0) {
-    return specialSequenceCompare;
-  }
-
-  if (isSpecialSequence(aSequenceForSort) && isSpecialSequence(bSequenceForSort)) {
-    const shelfmarkCompare = compareText(a.shelfmark, b.shelfmark);
-    if (shelfmarkCompare !== 0) {
-      return shelfmarkCompare;
-    }
-
-    const authorCompare = compareText(a.author, b.author);
-    if (authorCompare !== 0) {
-      return authorCompare;
-    }
-
-    const barcodeCompare = compareText(a.barcode, b.barcode);
-    if (barcodeCompare !== 0) {
-      return barcodeCompare;
-    }
-
-    return a.originalIndex - b.originalIndex;
-  }
-
-  const typeBucketCompare = compareTypeBucket(a.itemType, b.itemType);
-  if (typeBucketCompare !== 0) {
-    return typeBucketCompare;
-  }
-
-  const itemTypeCompare = compareText(a.itemType, b.itemType);
-  if (itemTypeCompare !== 0) {
-    return itemTypeCompare;
-  }
-
-  const sequenceCompare = compareSequence(
-    aSequenceForSort,
-    bSequenceForSort,
-  );
-  if (sequenceCompare !== 0) {
-    return sequenceCompare;
-  }
-
-  const shelfmarkCompare = compareText(a.shelfmark, b.shelfmark);
-  if (shelfmarkCompare !== 0) {
-    return shelfmarkCompare;
-  }
-
-  const authorCompare = compareText(a.author, b.author);
-  if (authorCompare !== 0) {
-    return authorCompare;
-  }
-
-  const barcodeCompare = compareText(a.barcode, b.barcode);
-  if (barcodeCompare !== 0) {
-    return barcodeCompare;
-  }
-
-  return a.originalIndex - b.originalIndex;
-}
-
-function compareText(a: string, b: string): number {
-  return a.localeCompare(b, undefined, { sensitivity: "base", numeric: true });
-}
-
-function compareTypeBucket(aType: string, bType: string): number {
-  return itemTypeBucket(aType) - itemTypeBucket(bType);
-}
-
-function itemTypeBucket(itemType: string): number {
-  // Explicit rule: any DVD item type is treated as media/other.
-  if (/\bdvd\b/i.test(itemType)) {
-    return 3;
-  }
-
-  if (/^\s*(adult|junior)\s+non[- ]fiction\b/i.test(itemType)) {
-    return 0;
-  }
-
-  if (/^\s*(adult|junior)\s+fiction\b/i.test(itemType)) {
-    return 1;
-  }
-
-  if (/graphic\s+fiction/i.test(itemType)) {
-    return 2;
-  }
-
-  return 3;
-}
-
-function compareSequence(a: string, b: string): number {
-  const aBlank = a.trim() === "";
-  const bBlank = b.trim() === "";
-
-  if (aBlank && bBlank) {
-    return 0;
-  }
-
-  if (aBlank) {
-    return -1;
-  }
-
-  if (bBlank) {
-    return 1;
-  }
-
-  return compareText(a, b);
-}
-
-function normalizeSequenceForSorting(itemType: string, sequence: string, shelfSuffix: string): string {
-  if (isClassicsSuffix(shelfSuffix)) {
-    return CLASSICS_SEQUENCE;
-  }
-
-  if (!/^adult fiction$/i.test(itemType.trim())) {
-    return sequence;
-  }
-
-  const normalized = sequence.trim().toLowerCase();
-
-  // Local shelf policy: Thriller is filed with Crime.
-  if (normalized === "thriller") {
-    return "Crime";
-  }
-
-  // Local shelf policy: these are filed with general fiction.
-  if (
-    normalized === "historical" ||
-    normalized === "romance" ||
-    normalized === "saga" ||
-    normalized === "horror" ||
-    normalized === "western"
-  ) {
-    return "";
-  }
-
-  return sequence;
-}
-
-function isClassicsSuffix(shelfSuffix: string): boolean {
-  return shelfSuffix.trim().toLowerCase() === CLASSICS_SEQUENCE.toLowerCase();
-}
-
-function compareSpecialSequenceBucket(aSequence: string, bSequence: string): number {
-  const aSpecialName = specialSequenceName(aSequence);
-  const bSpecialName = specialSequenceName(bSequence);
-
-  if (!aSpecialName && !bSpecialName) {
-    return 0;
-  }
-
-  if (aSpecialName && !bSpecialName) {
-    return 1;
-  }
-
-  if (!aSpecialName && bSpecialName) {
-    return -1;
-  }
-
-  return compareText(aSpecialName!, bSpecialName!);
-}
-
-function isSpecialSequence(sequence: string): boolean {
-  return specialSequenceName(sequence) !== null;
-}
-
-function specialSequenceName(sequence: string): string | null {
-  const trimmed = sequence.trim();
-
-  if (
-    trimmed === FAIRY_FOLK_MYT_SEQUENCE ||
-    trimmed === CHILDRENS_GRAPHIC_NOVELS_SEQUENCE ||
-    trimmed === TEEN_GRAPHIC_NOVELS_SEQUENCE
-  ) {
-    return trimmed;
-  }
-
-  return null;
-}
-
 function buildDocument(
   audienceLabel: string,
   libraryName: string,
   reportDate: string,
   entries: Entry[],
+  options: ShelvingOptions,
   combinedList = false,
 ): RenderDocument {
   const title = combinedList
     ? `Reservation List - ${libraryName} - ${reportDate}`
     : `${audienceLabel} reservation list — ${libraryName} — ${reportDate}`;
-  const blocks = buildRenderBlocks(entries);
+  const blocks = buildRenderBlocks(entries, options);
   return { title, blocks };
 }
 
@@ -643,19 +440,19 @@ function updateDownloadButtons(sorted: SortResult): void {
   downloadCombinedButton.classList.add("hidden");
 }
 
-function buildRenderBlocks(entries: Entry[]): RenderBlock[] {
+function buildRenderBlocks(entries: Entry[], options: ShelvingOptions): RenderBlock[] {
   const blocks: RenderBlock[] = [];
   let lastGroupKey: string | null = null;
   let currentSectionHeading: RenderLine | null = null;
 
   for (const entry of entries) {
-    const effectiveSequence = normalizeSequenceForSorting(entry.itemType, entry.sequence, entry.shelfSuffix);
-    const groupKey = renderGroupKey(entry.itemType, effectiveSequence);
+    const sequence = effectiveSequence(entry, options);
+    const groupKey = renderGroupKey(entry.itemType, sequence);
 
     const cleanedEntryLines = buildEntryRenderLines(entry.rawLines);
 
     if (groupKey !== lastGroupKey) {
-      const sectionHeading = makeStyledLine(formatGroupHeading(entry.itemType, effectiveSequence), "bold");
+      const sectionHeading = makeStyledLine(formatGroupHeading(entry.itemType, sequence), "bold");
       currentSectionHeading = sectionHeading;
       const headingLines: RenderLine[] = [sectionHeading, makePlainLine("")];
 
@@ -686,26 +483,26 @@ function buildRenderBlocks(entries: Entry[]): RenderBlock[] {
   return blocks;
 }
 
-function formatGroupHeading(itemType: string, effectiveSequence: string): string {
-  const specialSequence = specialSequenceName(effectiveSequence);
+function formatGroupHeading(itemType: string, sequence: string): string {
+  const specialSequence = specialSequenceName(sequence);
   if (specialSequence) {
     return `${specialSequence} —`;
   }
 
-  if (effectiveSequence.trim() === "") {
+  if (sequence.trim() === "") {
     return `${itemType} —`;
   }
 
-  return `${itemType} — ${effectiveSequence}`;
+  return `${itemType} — ${sequence}`;
 }
 
-function renderGroupKey(itemType: string, effectiveSequence: string): string {
-  const specialSequence = specialSequenceName(effectiveSequence);
+function renderGroupKey(itemType: string, sequence: string): string {
+  const specialSequence = specialSequenceName(sequence);
   if (specialSequence) {
     return `sequence\u0000${specialSequence}`;
   }
 
-  return `${itemType}\u0000${effectiveSequence}`;
+  return `${itemType}\u0000${sequence}`;
 }
 
 function buildEntryRenderLines(rawLines: string[]): RenderLine[] {
@@ -983,6 +780,18 @@ function getPdfFontFamily(): PdfFontFamily {
   }
 
   return "helvetica";
+}
+
+function getShelvingOptions(): ShelvingOptions {
+  return {
+    classicsSeparate: classicsSeparate.value === "yes",
+    cultWithClassics: cultWithClassics.checked,
+    thrillersWith: thrillersWith.value === "fiction" ? "fiction" : DEFAULT_SHELVING_OPTIONS.thrillersWith,
+  };
+}
+
+function updateCultCheckboxVisibility(): void {
+  cultWithClassicsRow.classList.toggle("hidden", classicsSeparate.value !== "yes");
 }
 
 function getPdfColumns(): 1 | 2 {
@@ -1278,7 +1087,12 @@ function loadSavedSettings(): void {
       return;
     }
 
-    const parsed = JSON.parse(raw) as { font?: string; textSize?: string; columns?: string };
+    const parsed = JSON.parse(raw) as {
+      font?: string;
+      textSize?: string;
+      columns?: string;
+      shelving?: Partial<ShelvingOptions>;
+    };
 
     if (parsed.font && hasOption(pdfFont, parsed.font)) {
       pdfFont.value = parsed.font;
@@ -1291,8 +1105,23 @@ function loadSavedSettings(): void {
     if (parsed.columns && hasOption(pdfColumns, parsed.columns)) {
       pdfColumns.value = parsed.columns;
     }
+
+    const shelving = parsed.shelving ?? {};
+    if (typeof shelving.classicsSeparate === "boolean") {
+      classicsSeparate.value = shelving.classicsSeparate ? "yes" : "no";
+    }
+
+    if (typeof shelving.cultWithClassics === "boolean") {
+      cultWithClassics.checked = shelving.cultWithClassics;
+    }
+
+    if (shelving.thrillersWith && hasOption(thrillersWith, shelving.thrillersWith)) {
+      thrillersWith.value = shelving.thrillersWith;
+    }
   } catch {
     return;
+  } finally {
+    updateCultCheckboxVisibility();
   }
 }
 
@@ -1301,6 +1130,7 @@ function saveCurrentSettings(): boolean {
     font: getPdfFontFamily(),
     textSize: String(getPdfTextSize()),
     columns: String(getPdfColumns()),
+    shelving: getShelvingOptions(),
   };
 
   try {

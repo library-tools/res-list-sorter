@@ -79,6 +79,38 @@ textarea {
   font-weight: 400;
 }
 
+.shelvingOptions {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px 16px 14px;
+  margin: 0 0 14px;
+  font-size: 1.1rem;
+}
+
+.shelvingOptions legend {
+  font-weight: 700;
+  padding: 0 6px;
+}
+
+.shelvingQuestion {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 10px;
+}
+
+.shelvingQuestion label {
+  font-weight: 700;
+}
+
+.shelvingQuestion input[type="checkbox"] {
+  width: 22px;
+  height: 22px;
+  margin: 0;
+  cursor: pointer;
+}
+
 select {
   border: 1px solid var(--border);
   border-radius: 8px;

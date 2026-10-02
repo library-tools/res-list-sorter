@@ -17,6 +17,31 @@
 
       <textarea id="sourceText" rows="12" spellcheck="false"></textarea>
 
+      <fieldset class="shelvingOptions">
+        <legend>How is your library shelved?</legend>
+
+        <div class="shelvingQuestion">
+          <label for="classicsSeparate">Do you want Classics listed separately?</label>
+          <select id="classicsSeparate">
+            <option value="yes" selected>Yes</option>
+            <option value="no">No</option>
+          </select>
+        </div>
+
+        <div id="cultWithClassicsRow" class="shelvingQuestion">
+          <label for="cultWithClassics">Include Cult books in Classics</label>
+          <input id="cultWithClassics" type="checkbox" />
+        </div>
+
+        <div class="shelvingQuestion">
+          <label for="thrillersWith">Where are Thriller books shelved?</label>
+          <select id="thrillersWith">
+            <option value="fiction">Normal fiction</option>
+            <option value="crime" selected>Crime fiction</option>
+          </select>
+        </div>
+      </fieldset>
+
       <div class="controlRow">
         <label for="pdfFont" class="label inline">Font</label>
         <select id="pdfFont">
